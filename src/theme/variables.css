@@ -1,0 +1,22 @@
+body {
+  /* Mengubah warna latar belakang luar (area desktop yang kosong) menjadi abu-abu terang */
+  background-color: #f0f2f5 !important;
+  display: flex;
+  justify-content: center;
+}
+
+ion-app {
+  /* Mengunci lebar maksimal aplikasi seukuran layar HP standar */
+  max-width: 480px;
+  width: 100%;
+  position: relative;
+
+  /* Memberikan efek bayangan agar aplikasi terlihat menonjol dari latar belakang */
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+
+  /* Memastikan warna latar dalam aplikasi tetap putih bersih */
+  background-color: #ffffff;
+
+  /* Memastikan aplikasi selalu berada di tengah layar */
+  margin: 0 auto;
+}

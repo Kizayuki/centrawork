@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// 1. Tabel Master Hak Akses
+model Role {
+  id          Int      @id @default(autoincrement())
+  nama_role   String
+  level_akses Int
+  users       User[]
+}
+
+// 2. Tabel Data Karyawan/Pengguna
+model User {
+  id                String             @id @default(uuid())
+  role_id           Int
+  nama_lengkap      String
+  email             String             @unique
+  password          String             
+  foto_profil       String?            @db.LongText
+  status_aktif      Boolean            @default(true)
+  created_at        DateTime           @default(now())
+  
+  role              Role               @relation(fields: [role_id], references: [id])
+  tasks_created     Task[]             @relation("PembuatTugas")
+  tasks_assigned    TaskAssignment[]
+  notifications     Notification[]     @relation("PengirimNotif")
+  audit_logs        AuditLog[]
+  user_notifications UserNotification[]
+}
+
+// 3. Tabel Data Induk Tugas
+model Task {
+  id              String             @id @default(uuid())
+  pembuat_id      String?
+  judul_tugas     String
+  deskripsi       String?            @db.Text
+  jenis_tugas     String             // 'Delegasi', 'Mandiri', 'Rutin'
+  tenggat_waktu   DateTime?
+  poin            Int                @default(10)
+  created_at      DateTime           @default(now())
+  
+  pembuat         User?              @relation("PembuatTugas", fields: [pembuat_id], references: [id])
+  assignments     TaskAssignment[]
+}
+
+// 4. Tabel Pivot/Penerima Tugas
+model TaskAssignment {
+  id                String    @id @default(uuid())
+  task_id           String
+  penerima_id       String
+  status            String    @default("Pending") // 'Pending', 'Selesai', 'Tidak Dikerjakan'
+  diselesaikan_pada DateTime?
+  laporan           String?   @db.Text
+  
+  task              Task      @relation(fields: [task_id], references: [id], onDelete: Cascade)
+  penerima          User      @relation(fields: [penerima_id], references: [id], onDelete: Cascade)
+}
+
+// 5. Tabel Data Induk Notifikasi
+model Notification {
+  id               String             @id @default(uuid())
+  pengirim_id      String?
+  judul_notifikasi String
+  isi_pesan        String             @db.Text
+  created_at       DateTime           @default(now())
+  
+  pengirim         User?              @relation("PengirimNotif", fields: [pengirim_id], references: [id], onDelete: SetNull)
+  receivers        UserNotification[]
+}
+
+// 6. Tabel Pivot Penerima Notifikasi
+model UserNotification {
+  id              String       @id @default(uuid())
+  notification_id String
+  penerima_id     String
+  is_read         Boolean      @default(false)
+  
+  notification    Notification @relation(fields: [notification_id], references: [id], onDelete: Cascade)
+  penerima        User         @relation(fields: [penerima_id], references: [id], onDelete: Cascade)
+}
+
+// 7. Tabel Tugas Rutin (Default)
+model DefaultTask {
+  id             String   @id @default(uuid())
+  judul_tugas    String
+  deskripsi      String?  @db.Text
+  target_role_id Int
+  jam_tenggat    String?
+  status_aktif   Boolean  @default(true)
+  created_at     DateTime @default(now())
+}
+
+// 8. Tabel Log Aktivitas (Audit Trail)
+model AuditLog {
+  id        String   @id @default(uuid())
+  user_id   String
+  aktor     String   // Nama orang yang melakukan aksi
+  aksi      String   // Jenis Aksi (Misal: HAPUS USER, BUAT TUGAS)
+  detail    String   @db.Text // Deskripsi lengkap aksi
+  waktu     DateTime @default(now())
+  
+  user      User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}

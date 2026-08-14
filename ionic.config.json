@@ -1,0 +1,7 @@
+{
+  "name": "centrawork",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "react-vite"
+}
