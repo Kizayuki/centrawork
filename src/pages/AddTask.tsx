@@ -38,7 +38,7 @@ const AddTask: React.FC = () => {
   const [jenisTugas, setJenisTugas] = useState("Mandiri");
   const [tenggatWaktu, setTenggatWaktu] = useState("");
   const [showPicker, setShowPicker] = useState(false);
-  const [penerimaId, setPenerimaId] = useState("");
+  const [penerimaId, setPenerimaId] = useState<string[]>([]);
   const [usersList, setUsersList] = useState<UserData[]>([]);
   const [currentUserLevel, setCurrentUserLevel] = useState(10);
   const [currentUserId, setCurrentUserId] = useState("");
@@ -98,8 +98,6 @@ const AddTask: React.FC = () => {
       day: "numeric",
       month: "long",
       year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
     });
   };
 
@@ -163,24 +161,25 @@ const AddTask: React.FC = () => {
                 position="stacked"
                 style={{ color: "gray", fontWeight: "bold" }}
               >
-                Tenggat Waktu Penyelesaian
+                Tenggat Penyelesaian (Batas Akhir Hari)
               </IonLabel>
               <IonInput
                 value={formatTanggalLokal(tenggatWaktu)}
                 readonly
-                placeholder="-- Pilih Tanggal & Waktu --"
+                placeholder="-- Pilih Tanggal --"
+                style={{ pointerEvents: "none" }}
               />
             </IonItem>
 
             <IonModal
               isOpen={showPicker}
               onDidDismiss={() => setShowPicker(false)}
-              initialBreakpoint={0.7}
-              breakpoints={[0, 0.7, 1]}
+              initialBreakpoint={0.65}
+              breakpoints={[0, 0.65, 0.8]}
             >
               <IonContent className="ion-padding ion-text-center">
                 <IonDatetime
-                  presentation="date-time"
+                  presentation="date"
                   value={tenggatWaktu}
                   onIonChange={(e) => setTenggatWaktu(e.detail.value as string)}
                   style={{
@@ -216,7 +215,7 @@ const AddTask: React.FC = () => {
                 value={jenisTugas}
                 onIonChange={(e) => {
                   setJenisTugas(e.detail.value);
-                  if (e.detail.value === "Mandiri") setPenerimaId("");
+                  if (e.detail.value === "Mandiri") setPenerimaId([]);
                 }}
                 interface="action-sheet"
               >
@@ -232,38 +231,98 @@ const AddTask: React.FC = () => {
             </IonItem>
 
             {jenisTugas === "Delegasi" && (
-              <IonItem lines="none" style={{ backgroundColor: "#f0f8ff" }}>
-                <IonLabel
-                  position="stacked"
-                  style={{ color: "#3880ff", fontWeight: "bold" }}
-                >
-                  Pilih Karyawan Penerima *
-                </IonLabel>
-                <IonSelect
-                  value={penerimaId}
-                  onIonChange={(e) => setPenerimaId(e.detail.value)}
-                  placeholder="-- Ketuk untuk memilih --"
-                  interface="alert"
-                >
-                  {delegasiUsers.map((user) => (
-                    <IonSelectOption key={user.id} value={user.id}>
-                      {user.nama_lengkap} ({user.role?.nama_role})
-                    </IonSelectOption>
-                  ))}
-                  {delegasiUsers.length === 0 && (
-                    <IonSelectOption disabled>
-                      -- Tidak ada bawahan yang tersedia --
-                    </IonSelectOption>
-                  )}
-                </IonSelect>
-              </IonItem>
+              <>
+                <IonItem lines="none" style={{ backgroundColor: "#f0f8ff" }}>
+                  <IonLabel
+                    position="stacked"
+                    style={{ color: "#3880ff", fontWeight: "bold" }}
+                  >
+                    Pilih Karyawan Penerima *
+                  </IonLabel>
+                  <IonSelect
+                    multiple={true}
+                    value={penerimaId}
+                    onIonChange={(e) => setPenerimaId(e.detail.value)}
+                    placeholder="-- Ketuk untuk memilih --"
+                    interface="alert"
+                    // PERBAIKAN: Menyembunyikan nama panjang menyamping menjadi angka saja
+                    selectedText={
+                      penerimaId.length > 0
+                        ? `${penerimaId.length} Orang Terpilih`
+                        : ""
+                    }
+                  >
+                    {delegasiUsers.map((user) => (
+                      <IonSelectOption key={user.id} value={user.id}>
+                        {user.nama_lengkap} ({user.role?.nama_role})
+                      </IonSelectOption>
+                    ))}
+                    {delegasiUsers.length === 0 && (
+                      <IonSelectOption disabled>
+                        -- Tidak ada bawahan yang tersedia --
+                      </IonSelectOption>
+                    )}
+                  </IonSelect>
+                </IonItem>
+
+                {/* PERBAIKAN: Menampilkan nama ke bawah dengan sangat rapi */}
+                {penerimaId.length > 0 && (
+                  <div
+                    style={{
+                      backgroundColor: "#e8f0fe",
+                      padding: "10px 15px",
+                      borderTop: "1px solid #d4e3fc",
+                    }}
+                  >
+                    <p
+                      style={{
+                        margin: "0 0 8px 0",
+                        fontSize: "0.85rem",
+                        color: "#3880ff",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      Karyawan Yang Ditugaskan:
+                    </p>
+                    {penerimaId.map((id) => {
+                      const u = delegasiUsers.find((x) => x.id === id);
+                      return u ? (
+                        <div
+                          key={id}
+                          style={{
+                            fontSize: "0.95rem",
+                            color: "#1f1f1f",
+                            padding: "4px 0",
+                            display: "flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: "6px",
+                              height: "6px",
+                              backgroundColor: "#3880ff",
+                              borderRadius: "50%",
+                              marginRight: "8px",
+                            }}
+                          ></div>
+                          {u.nama_lengkap}
+                        </div>
+                      ) : null;
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </IonList>
 
           <IonButton
             expand="block"
             type="submit"
-            disabled={isLoading || (jenisTugas === "Delegasi" && !penerimaId)}
+            disabled={
+              isLoading ||
+              (jenisTugas === "Delegasi" && penerimaId.length === 0)
+            }
             style={{
               marginTop: "30px",
               "--border-radius": "8px",

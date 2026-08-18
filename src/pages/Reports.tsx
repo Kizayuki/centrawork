@@ -34,6 +34,8 @@ interface ReportItem {
   nama_role: string;
   total_tugas: number;
   tugas_selesai: number;
+  tugas_pending: number; // DATA BARU
+  tugas_gagal: number; // DATA BARU
   produktivitas: number;
   poin: number;
 }
@@ -156,14 +158,20 @@ const Reports: React.FC = () => {
                       Ranking Karyawan
                     </h4>
                   </IonText>
-                  <IonButton
-                    size="small"
-                    color="success"
-                    onClick={downloadExcel}
-                  >
-                    <IonIcon icon={downloadOutline} slot="start" /> Export Excel
-                  </IonButton>
+
+                  {/* PERBAIKAN: Hanya Executive yang bisa melihat tombol Export */}
+                  {isExecutive && (
+                    <IonButton
+                      size="small"
+                      color="success"
+                      onClick={downloadExcel}
+                    >
+                      <IonIcon icon={downloadOutline} slot="start" /> Export
+                      Excel
+                    </IonButton>
+                  )}
                 </div>
+
                 <IonList style={{ background: "transparent" }} lines="none">
                   {reports.map((item, index) => (
                     <IonItem
@@ -229,14 +237,49 @@ const Reports: React.FC = () => {
                         </div>
                       </IonLabel>
                       <div slot="end" style={{ textAlign: "right" }}>
-                        <IonText color="medium">
-                          <h3 style={{ margin: 0, fontWeight: "bold" }}>
+                        <IonText color="dark">
+                          <h3
+                            style={{
+                              margin: 0,
+                              fontWeight: "bold",
+                              fontSize: "1.2rem",
+                            }}
+                          >
                             {item.tugas_selesai} / {item.total_tugas}
                           </h3>
-                          <p style={{ margin: 0, fontSize: "0.75rem" }}>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: "0.75rem",
+                              color: "gray",
+                            }}
+                          >
                             Selesai
                           </p>
                         </IonText>
+
+                        {/* FITUR TAMBAHAN: Menampilkan juga Tugas Pending dan Gagal */}
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "5px",
+                            marginTop: "5px",
+                            justifyContent: "flex-end",
+                          }}
+                        >
+                          <IonBadge
+                            color="warning"
+                            style={{ fontSize: "0.65rem" }}
+                          >
+                            {item.tugas_pending} P
+                          </IonBadge>
+                          <IonBadge
+                            color="danger"
+                            style={{ fontSize: "0.65rem" }}
+                          >
+                            {item.tugas_gagal} G
+                          </IonBadge>
+                        </div>
                       </div>
                     </IonItem>
                   ))}

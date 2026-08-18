@@ -269,7 +269,7 @@ app.get("/api/tasks", authenticate, async (req: Request, res: Response) => {
             pembuat: { select: { nama_lengkap: true } },
           },
         },
-        penerima: { select: { id: true, nama_lengkap: true } },
+        penerima: { select: { id: true, nama_lengkap: true, role_id: true } },
       },
       orderBy: { diselesaikan_pada: "desc" },
     });
@@ -280,31 +280,46 @@ app.get("/api/tasks", authenticate, async (req: Request, res: Response) => {
   }
 });
 
+// PERBAIKAN: Menerima foto_bukti pada pembaruan tugas
 app.patch(
   "/api/tasks/:id/status",
   authenticate,
   async (req: Request, res: Response) => {
     try {
-      const { status, laporan } = req.body;
-      const diselesaikanPada = status === "Selesai" ? new Date() : null;
+      const { status, laporan, foto_bukti } = req.body;
       const assignmentInfo = await prisma.taskAssignment.findUnique({
         where: { id: req.params.id as string },
         include: { task: true },
       });
+
+      const updateData: {
+        status?: string;
+        diselesaikan_pada?: Date | null;
+        laporan?: string | null;
+        foto_bukti?: string | null;
+      } = {};
+
+      if (status !== undefined) {
+        updateData.status = status;
+        updateData.diselesaikan_pada = status === "Selesai" ? new Date() : null;
+      }
+      if (laporan !== undefined) updateData.laporan = laporan;
+      if (foto_bukti !== undefined) updateData.foto_bukti = foto_bukti;
+
       const updatedTask = await prisma.taskAssignment.update({
         where: { id: req.params.id as string },
-        data: {
-          status: status,
-          diselesaikan_pada: diselesaikanPada,
-          laporan: laporan || null,
-        },
+        data: updateData,
       });
+
       const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       const judulTugas = assignmentInfo?.task?.judul_tugas || "Tugas";
       const pesanLog =
         status === "Selesai"
           ? `Menyelesaikan tugas: "${judulTugas}"`
-          : `Mengubah status tugas "${judulTugas}" menjadi ${status}`;
+          : status
+            ? `Mengubah status tugas "${judulTugas}" menjadi ${status}`
+            : `Menyimpan bukti/laporan pada tugas "${judulTugas}"`;
+
       await catatAudit(
         res.locals.user.id,
         namaAktor,
@@ -325,27 +340,48 @@ app.post("/api/tasks", authenticate, async (req: Request, res: Response) => {
     const { judul_tugas, deskripsi, jenis_tugas, penerima_id, tenggat_waktu } =
       req.body;
     const pembuatId = res.locals.user.id;
+
+    let deadline = null;
+    if (tenggat_waktu) {
+      const d = new Date(tenggat_waktu);
+      d.setHours(23, 59, 59, 999);
+      deadline = d;
+    }
+
     const newTask = await prisma.task.create({
       data: {
         pembuat_id: pembuatId,
         judul_tugas,
         deskripsi,
         jenis_tugas,
-        tenggat_waktu: tenggat_waktu ? new Date(tenggat_waktu) : null,
+        tenggat_waktu: deadline,
       },
     });
-    await prisma.taskAssignment.create({
-      data: {
-        task_id: newTask.id,
-        penerima_id: jenis_tugas === "Mandiri" ? pembuatId : penerima_id,
-      },
-    });
+
+    let penerimaArray: string[] = [];
+    if (jenis_tugas === "Mandiri") {
+      penerimaArray = [pembuatId];
+    } else {
+      if (Array.isArray(penerima_id)) {
+        penerimaArray = penerima_id;
+      } else if (penerima_id) {
+        penerimaArray = [penerima_id];
+      }
+    }
+
+    const assignments = penerimaArray.map((id) => ({
+      task_id: newTask.id,
+      penerima_id: id,
+      status: "Pending",
+    }));
+    await prisma.taskAssignment.createMany({ data: assignments });
+
     const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
     await catatAudit(
       pembuatId,
       namaAktor,
       "BUAT TUGAS BARU",
-      `Judul: "${judul_tugas}"`,
+      `Judul: "${judul_tugas}" ditugaskan ke ${penerimaArray.length} orang.`,
     );
     io.emit("refresh_data");
     res.status(201).json({ message: "Tugas berhasil dibuat!" });
@@ -362,6 +398,7 @@ app.get("/api/reports", authenticate, async (req: Request, res: Response) => {
       select: {
         id: true,
         nama_lengkap: true,
+        role_id: true,
         role: { select: { nama_role: true } },
       },
     });
@@ -371,19 +408,27 @@ app.get("/api/reports", authenticate, async (req: Request, res: Response) => {
     const stats = users.map((user) => {
       const userTasks = assignments.filter((a) => a.penerima_id === user.id);
       const totalTugas = userTasks.length;
+
       const selesai = userTasks.filter((a) => a.status === "Selesai");
+      const pending = userTasks.filter((a) => a.status === "Pending");
+      const gagal = userTasks.filter((a) => a.status === "Tidak Dikerjakan");
+
       const totalPoin = selesai.reduce(
         (acc, curr) => acc + (curr.task?.poin || 0),
         0,
       );
       const produktivitas =
         totalTugas > 0 ? Math.round((selesai.length / totalTugas) * 100) : 0;
+
       return {
         id: user.id,
         nama_lengkap: user.nama_lengkap,
         nama_role: user.role?.nama_role || "-",
+        role_id: user.role_id,
         total_tugas: totalTugas,
         tugas_selesai: selesai.length,
+        tugas_pending: pending.length,
+        tugas_gagal: gagal.length,
         poin: totalPoin,
         produktivitas,
       };
@@ -737,7 +782,7 @@ app.patch(
 );
 
 // =====================================
-// 5. TUGAS RUTIN (Tiap Jam 07:00 Pagi)
+// 5. SISTEM ROBOT CRON JOB
 // =====================================
 cron.schedule("0 7 * * *", async () => {
   try {
@@ -798,7 +843,13 @@ cron.schedule("0 7 * * *", async () => {
         await prisma.taskAssignment.createMany({ data: assignments });
       }
     }
+  } catch (error) {
+    console.error("❌ Gagal menjalankan Robot Tugas Rutin:", error);
+  }
+});
 
+cron.schedule("* * * * *", async () => {
+  try {
     const now = new Date();
     const expiredAssignments = await prisma.taskAssignment.findMany({
       where: { status: "Pending", task: { tenggat_waktu: { lt: now } } },
@@ -821,7 +872,7 @@ cron.schedule("0 7 * * *", async () => {
       io.emit("refresh_data");
     }
   } catch (error) {
-    console.error("❌ Gagal menjalankan Cron Job:", error);
+    console.error("❌ Gagal menjalankan Robot Kedaluwarsa:", error);
   }
 });
 

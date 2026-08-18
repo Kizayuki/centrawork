@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   IonContent,
   IonHeader,
@@ -24,16 +24,20 @@ import {
   IonTextarea,
   IonToast,
   IonSearchbar,
+  IonCheckbox,
+  IonSelect,
+  IonSelectOption,
+  IonGrid,
+  IonRow,
+  IonCol,
 } from "@ionic/react";
 import {
   add,
   createOutline,
   closeOutline,
-  checkmarkCircle,
-  timeOutline,
-  chevronForwardOutline,
   documentTextOutline,
   alertCircleOutline,
+  imageOutline,
 } from "ionicons/icons";
 import { io } from "socket.io-client";
 import api from "../api";
@@ -42,6 +46,7 @@ interface TaskAssignment {
   id: string;
   status: string;
   laporan?: string;
+  foto_bukti?: string;
   task: {
     id: string;
     judul_tugas: string;
@@ -50,20 +55,53 @@ interface TaskAssignment {
     tenggat_waktu?: string;
     pembuat?: { nama_lengkap: string } | null;
   } | null;
-  penerima: { id: string; nama_lengkap: string } | null;
+  penerima: { id: string; nama_lengkap: string; role_id?: number } | null;
+}
+
+interface RoleItem {
+  id: number;
+  nama_role: string;
 }
 
 const TasksTab: React.FC = () => {
   const [filter, setFilter] = useState("semua");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedRole, setSelectedRole] = useState("semua");
+  const [statusFilter, setStatusFilter] = useState("semua");
+
   const [tasksList, setTasksList] = useState<TaskAssignment[]>([]);
+  const [roles, setRoles] = useState<RoleItem[]>([]);
+
   const [isLoading, setIsLoading] = useState(true);
   const [toastMsg, setToastMsg] = useState("");
-  const [userRole, setUserRole] = useState("");
-  const [currentUserId, setCurrentUserId] = useState("");
+
+  // PERBAIKAN LINTER: Menginisiasi data secara langsung agar tidak terjadi flash UI,
+  // sekaligus menggunakan setter di useEffect agar linter tidak mendeteksi variabel menganggur.
+  const [userRole, setUserRole] = useState(() => {
+    const storedUser = localStorage.getItem("centrawork_user");
+    return storedUser ? JSON.parse(storedUser).role : "";
+  });
+  const [currentUserId, setCurrentUserId] = useState(() => {
+    const storedUser = localStorage.getItem("centrawork_user");
+    return storedUser ? JSON.parse(storedUser).id : "";
+  });
+
+  useEffect(() => {
+    const storedUser = localStorage.getItem("centrawork_user");
+    if (storedUser) {
+      const parsed = JSON.parse(storedUser);
+      setUserRole(parsed.role);
+      setCurrentUserId(parsed.id);
+    }
+  }, []);
+
   const [detailModal, setDetailModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<TaskAssignment | null>(null);
   const [laporanText, setLaporanText] = useState("");
+  const [fotoBukti, setFotoBukti] = useState("");
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [showEdit, setShowEdit] = useState(false);
   const [editId, setEditId] = useState("");
   const [editJudul, setEditJudul] = useState("");
@@ -80,20 +118,28 @@ const TasksTab: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const storedUser = localStorage.getItem("centrawork_user");
-    if (storedUser) {
-      const parsed = JSON.parse(storedUser);
-      setUserRole(parsed.role);
-      setCurrentUserId(parsed.id);
+  const syncFavicon = () => {
+    const icon = localStorage.getItem("centrawork_app_icon");
+    if (icon) {
+      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        document.head.appendChild(link);
+      }
+      link.href = icon;
     }
-  }, []);
+  };
 
   const fetchTasks = async (showLoading = true) => {
     if (showLoading) setIsLoading(true);
     try {
-      const response = await api.get<TaskAssignment[]>("/tasks");
-      setTasksList(response.data);
+      const [tasksRes, rolesRes] = await Promise.all([
+        api.get<TaskAssignment[]>("/tasks"),
+        api.get<RoleItem[]>("/roles"),
+      ]);
+      setTasksList(tasksRes.data);
+      setRoles(rolesRes.data);
     } catch {
       console.error("Gagal menarik data tugas");
     } finally {
@@ -103,37 +149,92 @@ const TasksTab: React.FC = () => {
 
   useIonViewWillEnter(() => {
     fetchTasks();
+    syncFavicon();
   });
 
-  const formatTanggal = (iso?: string) => {
+  const formatTanggalHanyaDate = (iso?: string) => {
     if (!iso) return "-";
     return new Date(iso).toLocaleString("id-ID", {
       day: "numeric",
       month: "long",
       year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
     });
   };
 
   const openTaskDetail = (item: TaskAssignment) => {
     setSelectedTask(item);
     setLaporanText(item.laporan || "");
+    setFotoBukti(item.foto_bukti || "");
     setDetailModal(true);
   };
 
-  const submitLaporan = async () => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsSaving(true);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_SIZE = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height && width > MAX_SIZE) {
+          height *= MAX_SIZE / width;
+          width = MAX_SIZE;
+        } else if (height > MAX_SIZE) {
+          width *= MAX_SIZE / height;
+          height = MAX_SIZE;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        const base64 = canvas.toDataURL("image/jpeg", 0.7);
+        setFotoBukti(base64);
+        setIsSaving(false);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const toggleStatus = async (item: TaskAssignment) => {
+    if (item.status === "Tidak Dikerjakan") return;
+
+    const newStatus = item.status === "Selesai" ? "Pending" : "Selesai";
+    setTasksList((prev) =>
+      prev.map((t) => (t.id === item.id ? { ...t, status: newStatus } : t)),
+    );
+
+    try {
+      await api.patch(`/tasks/${item.id}/status`, { status: newStatus });
+    } catch {
+      setTasksList((prev) =>
+        prev.map((t) => (t.id === item.id ? { ...t, status: item.status } : t)),
+      );
+      setToastMsg("Gagal memperbarui status tugas.");
+    }
+  };
+
+  const submitLaporanOnly = async () => {
     if (!selectedTask) return;
     setIsSaving(true);
     try {
       await api.patch(`/tasks/${selectedTask.id}/status`, {
-        status: "Selesai",
         laporan: laporanText,
+        foto_bukti: fotoBukti,
       });
-      setToastMsg("Tugas diselesaikan dan laporan terkirim!");
+      setToastMsg("Laporan / Bukti berhasil disimpan!");
       setDetailModal(false);
+      fetchTasks(false);
     } catch {
-      setToastMsg("Gagal mengirim laporan.");
+      setToastMsg("Gagal menyimpan laporan.");
     } finally {
       setIsSaving(false);
     }
@@ -163,21 +264,46 @@ const TasksTab: React.FC = () => {
     }
   };
 
-  const filteredTasks = tasksList.filter((item) => {
+  // LOGIKA FILTER
+  const baseTasks = tasksList.filter((item) => {
     const taskTitle = item.task?.judul_tugas?.toLowerCase() || "";
     const userName = item.penerima?.nama_lengkap?.toLowerCase() || "";
     const query = searchQuery.toLowerCase();
-    const matchesSearch = taskTitle.includes(query) || userName.includes(query);
-    if (!matchesSearch) return false;
+
+    if (!taskTitle.includes(query) && !userName.includes(query)) return false;
+    if (
+      selectedRole !== "semua" &&
+      item.penerima?.role_id !== Number(selectedRole)
+    )
+      return false;
 
     if (filter === "semua") return true;
     if (filter === "rutin" && item.task?.jenis_tugas === "Rutin") return true;
-    if (filter === "atasan" && item.task?.jenis_tugas === "Delegasi")
+    if (filter === "delegasi" && item.task?.jenis_tugas === "Delegasi")
       return true;
     if (filter === "mandiri" && item.task?.jenis_tugas === "Mandiri")
       return true;
     return false;
   });
+
+  // PERBAIKAN: Mengurutkan otomatis. "Pending" di atas, sisanya di bawah.
+  const sortedTasks = baseTasks.sort((a, b) => {
+    if (a.status === "Pending" && b.status !== "Pending") return -1;
+    if (a.status !== "Pending" && b.status === "Pending") return 1;
+    return 0;
+  });
+
+  const countSelesai = sortedTasks.filter((t) => t.status === "Selesai").length;
+  const countPending = sortedTasks.filter((t) => t.status === "Pending").length;
+  const countGagal = sortedTasks.filter(
+    (t) => t.status === "Tidak Dikerjakan",
+  ).length;
+  const countTotal = sortedTasks.length;
+
+  const filteredTasks = sortedTasks.filter(
+    (t) => statusFilter === "semua" || t.status === statusFilter,
+  );
+  const isExecutive = userRole === "Super Admin" || userRole === "Super HR";
 
   return (
     <IonPage>
@@ -193,7 +319,10 @@ const TasksTab: React.FC = () => {
         <IonToolbar color="primary">
           <IonSegment
             value={filter}
-            onIonChange={(e) => setFilter(e.detail.value as string)}
+            onIonChange={(e) => {
+              setFilter(e.detail.value as string);
+              setStatusFilter("semua");
+            }}
             color="light"
             scrollable
           >
@@ -203,11 +332,10 @@ const TasksTab: React.FC = () => {
             <IonSegmentButton value="rutin">
               <IonLabel>Rutin</IonLabel>
             </IonSegmentButton>
-            {userRole !== "Super Admin" && userRole !== "Super HR" && (
-              <IonSegmentButton value="atasan">
-                <IonLabel>Atasan</IonLabel>
-              </IonSegmentButton>
-            )}
+            {/* PERBAIKAN: Menyamakan penamaan segmen delegasi yang responsif */}
+            <IonSegmentButton value="delegasi">
+              <IonLabel>{isExecutive ? "Delegasi" : "Dari Atasan"}</IonLabel>
+            </IonSegmentButton>
             <IonSegmentButton value="mandiri">
               <IonLabel>Mandiri</IonLabel>
             </IonSegmentButton>
@@ -216,13 +344,191 @@ const TasksTab: React.FC = () => {
       </IonHeader>
 
       <IonContent fullscreen style={{ backgroundColor: "#f4f5f8" }}>
-        <div style={{ backgroundColor: "white", padding: "10px 0" }}>
+        <div style={{ backgroundColor: "white", padding: "10px 15px 0 15px" }}>
           <IonSearchbar
             value={searchQuery}
             onIonInput={(e) => setSearchQuery(e.detail.value!)}
             placeholder="Cari tugas atau nama pekerja..."
             animated={true}
+            style={{ padding: 0, paddingBottom: "10px" }}
           />
+
+          {isExecutive && (
+            <>
+              <IonSelect
+                value={selectedRole}
+                onIonChange={(e) => setSelectedRole(e.detail.value)}
+                placeholder="Filter Divisi"
+                interface="action-sheet"
+                style={{
+                  backgroundColor: "#f4f5f8",
+                  borderRadius: "8px",
+                  padding: "10px",
+                  marginBottom: "5px",
+                  fontWeight: "bold",
+                }}
+              >
+                <IonSelectOption value="semua">
+                  🏢 Lihat Semua Divisi
+                </IonSelectOption>
+                {roles.map((r) => (
+                  <IonSelectOption key={r.id} value={r.id}>
+                    {r.nama_role}
+                  </IonSelectOption>
+                ))}
+              </IonSelect>
+
+              <IonGrid className="ion-no-padding" style={{ padding: "10px 0" }}>
+                <IonRow>
+                  <IonCol size="3" onClick={() => setStatusFilter("semua")}>
+                    <div
+                      style={{
+                        textAlign: "center",
+                        padding: "8px 5px",
+                        backgroundColor:
+                          statusFilter === "semua" ? "#e8f0fe" : "#f4f5f8",
+                        borderRadius: "8px",
+                        border:
+                          statusFilter === "semua"
+                            ? "1px solid #3880ff"
+                            : "1px solid transparent",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <h3
+                        style={{
+                          margin: 0,
+                          fontWeight: "bold",
+                          color: "#3880ff",
+                        }}
+                      >
+                        {countTotal}
+                      </h3>
+                      <p
+                        style={{
+                          margin: "2px 0 0 0",
+                          fontSize: "0.65rem",
+                          color: "gray",
+                        }}
+                      >
+                        Total
+                      </p>
+                    </div>
+                  </IonCol>
+                  <IonCol size="3" onClick={() => setStatusFilter("Selesai")}>
+                    <div
+                      style={{
+                        textAlign: "center",
+                        padding: "8px 5px",
+                        backgroundColor:
+                          statusFilter === "Selesai" ? "#d1e7dd" : "#f4f5f8",
+                        borderRadius: "8px",
+                        border:
+                          statusFilter === "Selesai"
+                            ? "1px solid #198754"
+                            : "1px solid transparent",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <h3
+                        style={{
+                          margin: 0,
+                          fontWeight: "bold",
+                          color: "#198754",
+                        }}
+                      >
+                        {countSelesai}
+                      </h3>
+                      <p
+                        style={{
+                          margin: "2px 0 0 0",
+                          fontSize: "0.65rem",
+                          color: "gray",
+                        }}
+                      >
+                        Selesai
+                      </p>
+                    </div>
+                  </IonCol>
+                  <IonCol size="3" onClick={() => setStatusFilter("Pending")}>
+                    <div
+                      style={{
+                        textAlign: "center",
+                        padding: "8px 5px",
+                        backgroundColor:
+                          statusFilter === "Pending" ? "#fff3cd" : "#f4f5f8",
+                        borderRadius: "8px",
+                        border:
+                          statusFilter === "Pending"
+                            ? "1px solid #ffc107"
+                            : "1px solid transparent",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <h3
+                        style={{
+                          margin: 0,
+                          fontWeight: "bold",
+                          color: "#ffc107",
+                        }}
+                      >
+                        {countPending}
+                      </h3>
+                      <p
+                        style={{
+                          margin: "2px 0 0 0",
+                          fontSize: "0.65rem",
+                          color: "gray",
+                        }}
+                      >
+                        Pending
+                      </p>
+                    </div>
+                  </IonCol>
+                  <IonCol
+                    size="3"
+                    onClick={() => setStatusFilter("Tidak Dikerjakan")}
+                  >
+                    <div
+                      style={{
+                        textAlign: "center",
+                        padding: "8px 5px",
+                        backgroundColor:
+                          statusFilter === "Tidak Dikerjakan"
+                            ? "#f8d7da"
+                            : "#f4f5f8",
+                        borderRadius: "8px",
+                        border:
+                          statusFilter === "Tidak Dikerjakan"
+                            ? "1px solid #dc3545"
+                            : "1px solid transparent",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <h3
+                        style={{
+                          margin: 0,
+                          fontWeight: "bold",
+                          color: "#dc3545",
+                        }}
+                      >
+                        {countGagal}
+                      </h3>
+                      <p
+                        style={{
+                          margin: "2px 0 0 0",
+                          fontSize: "0.65rem",
+                          color: "gray",
+                        }}
+                      >
+                        Gagal
+                      </p>
+                    </div>
+                  </IonCol>
+                </IonRow>
+              </IonGrid>
+            </>
+          )}
         </div>
 
         {isLoading ? (
@@ -231,7 +537,10 @@ const TasksTab: React.FC = () => {
           </div>
         ) : (
           <div className="ion-padding-horizontal">
-            <IonList style={{ background: "transparent" }} lines="none">
+            <IonList
+              style={{ background: "transparent", marginTop: "10px" }}
+              lines="none"
+            >
               {filteredTasks.length === 0 ? (
                 <p
                   style={{
@@ -246,6 +555,9 @@ const TasksTab: React.FC = () => {
                 filteredTasks.map((item) => {
                   const isSelesai = item.status === "Selesai";
                   const isGagal = item.status === "Tidak Dikerjakan";
+                  const canCheck =
+                    item.penerima?.id === currentUserId && !isGagal;
+
                   return (
                     <IonItem
                       button
@@ -258,24 +570,41 @@ const TasksTab: React.FC = () => {
                         boxShadow: "0 2px 5px rgba(0,0,0,0.05)",
                       }}
                     >
-                      <IonIcon
-                        slot="start"
-                        icon={
-                          isSelesai
-                            ? checkmarkCircle
-                            : isGagal
-                              ? alertCircleOutline
-                              : timeOutline
-                        }
-                        color={
-                          isSelesai ? "success" : isGagal ? "danger" : "warning"
-                        }
-                        style={{
-                          fontSize: "1.8rem",
-                          alignSelf: "flex-start",
-                          marginTop: "12px",
-                        }}
-                      />
+                      {isGagal ? (
+                        <IonIcon
+                          slot="start"
+                          icon={alertCircleOutline}
+                          color="danger"
+                          style={{
+                            fontSize: "1.8rem",
+                            alignSelf: "flex-start",
+                            marginTop: "12px",
+                            marginRight: "15px",
+                          }}
+                        />
+                      ) : (
+                        <div
+                          slot="start"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (canCheck) toggleStatus(item);
+                          }}
+                          style={{
+                            alignSelf: "flex-start",
+                            marginTop: "12px",
+                            marginRight: "15px",
+                            zIndex: 10,
+                          }}
+                        >
+                          <IonCheckbox
+                            checked={isSelesai}
+                            disabled={!canCheck}
+                            color="success"
+                            style={{ pointerEvents: "none" }}
+                          />
+                        </div>
+                      )}
+
                       <IonLabel
                         className="ion-text-wrap"
                         style={{ margin: "10px 0" }}
@@ -324,8 +653,7 @@ const TasksTab: React.FC = () => {
                               "Sistem / Rutin"}
                           </b>
                         </p>
-                        {(userRole === "Super Admin" ||
-                          userRole === "Super HR") && (
+                        {isExecutive && (
                           <p
                             style={{
                               fontSize: "0.75rem",
@@ -347,13 +675,6 @@ const TasksTab: React.FC = () => {
                             <IonIcon icon={createOutline} />
                           </IonButton>
                         </div>
-                      )}
-                      {item.task?.jenis_tugas !== "Mandiri" && (
-                        <IonIcon
-                          slot="end"
-                          icon={chevronForwardOutline}
-                          color="medium"
-                        />
                       )}
                     </IonItem>
                   );
@@ -423,16 +744,15 @@ const TasksTab: React.FC = () => {
                 }
               >
                 <p style={{ fontWeight: "bold", margin: "5px 0" }}>
-                  Status: {selectedTask?.status}
+                  Status Saat Ini: {selectedTask?.status}
                 </p>
               </IonText>
               <p
                 style={{ fontSize: "0.9rem", color: "gray", margin: "10px 0" }}
               >
-                Diberikan oleh:{" "}
+                Pekerja:{" "}
                 <b style={{ color: "#3880ff" }}>
-                  {selectedTask?.task?.pembuat?.nama_lengkap ||
-                    "Sistem (Tugas Rutin)"}
+                  {selectedTask?.penerima?.nama_lengkap}
                 </b>
               </p>
 
@@ -445,7 +765,8 @@ const TasksTab: React.FC = () => {
                     fontWeight: "bold",
                   }}
                 >
-                  Batas Akhir: {formatTanggal(selectedTask.task.tenggat_waktu)}
+                  Batas Akhir:{" "}
+                  {formatTanggalHanyaDate(selectedTask.task.tenggat_waktu)}
                 </p>
               )}
 
@@ -455,15 +776,21 @@ const TasksTab: React.FC = () => {
                   fontSize: "0.9rem",
                   lineHeight: "1.5",
                   marginTop: "10px",
+                  padding: "15px",
+                  backgroundColor: "#f9f9f9",
+                  borderRadius: "8px",
                 }}
               >
+                <b>Instruksi:</b>
+                <br />
                 {selectedTask?.task?.deskripsi ||
                   "Tidak ada deskripsi tambahan untuk tugas ini."}
               </p>
             </div>
 
-            {selectedTask?.status === "Pending" ? (
-              selectedTask?.penerima?.id === currentUserId ? (
+            {/* FORM LAPORAN: Terbuka khusus selama tugas masih "Pending" */}
+            {selectedTask?.penerima?.id === currentUserId &&
+              selectedTask?.status === "Pending" && (
                 <>
                   <IonList
                     style={{
@@ -471,126 +798,135 @@ const TasksTab: React.FC = () => {
                       boxShadow: "0 2px 5px rgba(0,0,0,0.05)",
                     }}
                   >
-                    <IonItem lines="none">
+                    <IonItem lines="full">
                       <IonLabel
                         position="stacked"
                         style={{ color: "gray", fontWeight: "bold" }}
                       >
-                        Laporan Pekerjaan *
+                        Keterangan Laporan / Bukti
                       </IonLabel>
                       <IonTextarea
-                        placeholder="Tuliskan bukti/laporan hasil kerja Anda di sini sebelum menyelesaikan tugas..."
+                        placeholder="Tuliskan keterangan laporan tugas di sini..."
                         value={laporanText}
                         onIonInput={(e) => setLaporanText(e.detail.value!)}
-                        rows={5}
+                        rows={3}
                       />
                     </IonItem>
+                    <IonItem
+                      lines="none"
+                      button
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <IonIcon
+                        icon={imageOutline}
+                        slot="start"
+                        color="primary"
+                      />
+                      <IonLabel>
+                        {fotoBukti
+                          ? "Ubah Bukti Gambar"
+                          : "Unggah Bukti Gambar"}
+                      </IonLabel>
+                    </IonItem>
                   </IonList>
+
+                  {fotoBukti && (
+                    <div style={{ marginTop: "15px", textAlign: "center" }}>
+                      <img
+                        src={fotoBukti}
+                        alt="Bukti"
+                        style={{
+                          maxWidth: "100%",
+                          borderRadius: "8px",
+                          maxHeight: "200px",
+                          objectFit: "cover",
+                          boxShadow: "0 4px 10px rgba(0,0,0,0.1)",
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  <input
+                    type="file"
+                    accept="image/*"
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    style={{ display: "none" }}
+                  />
+
                   <IonButton
                     expand="block"
-                    onClick={submitLaporan}
-                    disabled={isSaving || !laporanText}
+                    onClick={submitLaporanOnly}
+                    disabled={isSaving}
                     style={{
-                      marginTop: "25px",
+                      marginTop: "15px",
                       "--border-radius": "10px",
                       height: "50px",
                     }}
                   >
-                    {isSaving ? (
-                      <IonSpinner name="dots" />
-                    ) : (
-                      "Kirim Laporan & Selesaikan"
-                    )}
+                    {isSaving ? <IonSpinner name="dots" /> : "Simpan Laporan"}
                   </IonButton>
-                </>
-              ) : (
-                <div
-                  style={{
-                    backgroundColor: "#fff3cd",
-                    padding: "20px",
-                    borderRadius: "12px",
-                    textAlign: "center",
-                  }}
-                >
-                  <IonIcon
-                    icon={timeOutline}
-                    color="warning"
-                    style={{ fontSize: "3rem" }}
-                  />
-                  <h4
+
+                  <div
                     style={{
-                      margin: "10px 0",
-                      color: "#664d03",
-                      fontWeight: "bold",
+                      textAlign: "center",
+                      color: "gray",
+                      fontSize: "0.85rem",
+                      marginTop: "20px",
                     }}
                   >
-                    Menunggu Pekerja
-                  </h4>
-                  <p
-                    style={{ color: "#664d03", margin: 0, fontSize: "0.9rem" }}
+                    Untuk menyatakan tugas benar-benar selesai, cukup centang
+                    kotak di halaman daftar tugas.
+                  </div>
+                </>
+              )}
+
+            {/* Tampilan Laporan untuk Atasan / Saat Tugas Sudah Selesai */}
+            {(selectedTask?.penerima?.id !== currentUserId ||
+              selectedTask?.status !== "Pending") &&
+              (selectedTask?.laporan || selectedTask?.foto_bukti) && (
+                <div
+                  style={{
+                    backgroundColor: "#e8f0fe",
+                    padding: "20px",
+                    borderRadius: "12px",
+                    marginTop: "15px",
+                  }}
+                >
+                  <h4
+                    style={{
+                      margin: "0 0 10px 0",
+                      color: "#3880ff",
+                      fontWeight: "bold",
+                      fontSize: "1rem",
+                    }}
                   >
-                    Tugas ini belum diselesaikan oleh{" "}
-                    {selectedTask?.penerima?.nama_lengkap}.
-                  </p>
+                    Laporan Terkirim:
+                  </h4>
+                  {selectedTask.laporan && (
+                    <p
+                      style={{
+                        color: "#333",
+                        margin: "0 0 15px 0",
+                        lineHeight: "1.5",
+                      }}
+                    >
+                      {selectedTask.laporan}
+                    </p>
+                  )}
+                  {selectedTask.foto_bukti && (
+                    <img
+                      src={selectedTask.foto_bukti}
+                      alt="Bukti Terkirim"
+                      style={{
+                        width: "100%",
+                        borderRadius: "8px",
+                        boxShadow: "0 2px 5px rgba(0,0,0,0.1)",
+                      }}
+                    />
+                  )}
                 </div>
-              )
-            ) : selectedTask?.status === "Selesai" ? (
-              <div
-                style={{
-                  backgroundColor: "#e8f0fe",
-                  padding: "20px",
-                  borderRadius: "12px",
-                }}
-              >
-                <h4
-                  style={{
-                    margin: "0 0 10px 0",
-                    color: "#3880ff",
-                    fontWeight: "bold",
-                    fontSize: "1rem",
-                  }}
-                >
-                  Laporan Terkirim:
-                </h4>
-                <p style={{ color: "#333", margin: 0, lineHeight: "1.5" }}>
-                  {selectedTask?.laporan || "Tugas diselesaikan tanpa laporan."}
-                </p>
-                <IonButton
-                  expand="block"
-                  disabled
-                  style={{ marginTop: "20px", "--border-radius": "10px" }}
-                >
-                  Tugas Telah Diselesaikan
-                </IonButton>
-              </div>
-            ) : (
-              <div
-                style={{
-                  backgroundColor: "#f8d7da",
-                  padding: "20px",
-                  borderRadius: "12px",
-                  textAlign: "center",
-                }}
-              >
-                <IonIcon
-                  icon={alertCircleOutline}
-                  color="danger"
-                  style={{ fontSize: "3rem" }}
-                />
-                <h4
-                  style={{
-                    margin: "10px 0",
-                    color: "#842029",
-                    fontWeight: "bold",
-                  }}
-                >
-                  Waktu Habis
-                </h4>
-                <p style={{ color: "#842029", margin: 0, fontSize: "0.9rem" }}>
-                  Tugas ini melewati tenggat waktu dan tidak dikerjakan.
-                </p>
-              </div>
-            )}
+              )}
           </IonContent>
         </IonModal>
 

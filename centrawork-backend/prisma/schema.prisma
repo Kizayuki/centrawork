@@ -57,7 +57,7 @@ model TaskAssignment {
   status            String    @default("Pending") // 'Pending', 'Selesai', 'Tidak Dikerjakan'
   diselesaikan_pada DateTime?
   laporan           String?   @db.Text
-  
+  foto_bukti        String?   @db.LongText
   task              Task      @relation(fields: [task_id], references: [id], onDelete: Cascade)
   penerima          User      @relation(fields: [penerima_id], references: [id], onDelete: Cascade)
 }

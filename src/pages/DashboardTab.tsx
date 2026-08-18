@@ -31,19 +31,12 @@ import api from "../api";
 
 interface TaskItem {
   status: string;
-  task: {
-    judul_tugas: string;
-    jenis_tugas: string;
-  } | null;
+  task: { judul_tugas: string; jenis_tugas: string } | null;
 }
-
 interface ProfileData {
   nama_lengkap: string;
-  role: {
-    nama_role: string;
-  } | null;
+  role: { nama_role: string } | null;
 }
-
 interface DashboardResponse {
   profile: ProfileData | null;
   tasks: TaskItem[];
@@ -60,10 +53,25 @@ const DashboardTab: React.FC = () => {
     pending: 0,
     terlewat: 0,
   });
-
   const [tugasTerbaru, setTugasTerbaru] = useState<TaskItem[]>([]);
 
+  // Fungsi Pembantu Sinkronisasi Favicon
+  const syncFavicon = () => {
+    const icon = localStorage.getItem("centrawork_app_icon");
+    if (icon) {
+      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        document.head.appendChild(link);
+      }
+      link.href = icon;
+    }
+  };
+
   useIonViewWillEnter(() => {
+    syncFavicon(); // Terapkan favicon langsung di halaman awal
+
     const fetchDashboardData = async () => {
       setIsLoading(true);
       try {
@@ -92,7 +100,6 @@ const DashboardTab: React.FC = () => {
             pending: pendingCount,
             terlewat: terlewatCount,
           });
-
           setTugasTerbaru(tasks.slice(0, 5));
         }
       } catch (error) {
@@ -322,5 +329,4 @@ const DashboardTab: React.FC = () => {
     </IonPage>
   );
 };
-
 export default DashboardTab;

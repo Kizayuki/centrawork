@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   IonContent,
   IonHeader,
@@ -24,6 +24,7 @@ import {
   openOutline,
   desktopOutline,
   saveOutline,
+  imageOutline,
 } from "ionicons/icons";
 import { useIonViewWillEnter } from "@ionic/react";
 
@@ -33,15 +34,31 @@ const AppSettings: React.FC = () => {
   const [toastMsg, setToastMsg] = useState("");
   const [userRole, setUserRole] = useState("");
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fungsi Pembantu Sinkronisasi Favicon Global
+  const syncFavicon = () => {
+    const icon = localStorage.getItem("centrawork_app_icon");
+    if (icon) {
+      let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = "icon";
+        document.head.appendChild(link);
+      }
+      link.href = icon;
+    }
+  };
+
   useIonViewWillEnter(() => {
     const storedUser = localStorage.getItem("centrawork_user");
     if (storedUser) setUserRole(JSON.parse(storedUser).role);
+    syncFavicon(); // Terapkan Favicon saat masuk halaman
   });
 
   useEffect(() => {
     const savedDarkMode = localStorage.getItem("dark_mode") === "true";
     setIsDark(savedDarkMode);
-
     const savedAppName =
       localStorage.getItem("centrawork_app_name") || "Centra Work";
     setAppName(savedAppName);
@@ -58,8 +75,44 @@ const AppSettings: React.FC = () => {
     localStorage.setItem("centrawork_app_name", appName);
     document.title = appName;
     window.dispatchEvent(new Event("app_name_changed"));
-
     setToastMsg("Nama Aplikasi berhasil disimpan!");
+  };
+
+  const handleIconChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_SIZE = 128;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height && width > MAX_SIZE) {
+          height *= MAX_SIZE / width;
+          width = MAX_SIZE;
+        } else if (height > MAX_SIZE) {
+          width *= MAX_SIZE / height;
+          height = MAX_SIZE;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        const base64 = canvas.toDataURL("image/png", 0.8);
+        localStorage.setItem("centrawork_app_icon", base64);
+
+        syncFavicon();
+        setToastMsg("Ikon Aplikasi berhasil diubah!");
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   const openWhatsApp = () => {
@@ -90,6 +143,14 @@ const AppSettings: React.FC = () => {
         className="ion-padding"
         style={{ backgroundColor: "#f4f5f8" }}
       >
+        <input
+          type="file"
+          accept="image/*"
+          ref={fileInputRef}
+          onChange={handleIconChange}
+          style={{ display: "none" }}
+        />
+
         {isExecutive ? (
           <>
             <div style={{ marginBottom: "15px", marginTop: "10px" }}>
@@ -127,6 +188,22 @@ const AppSettings: React.FC = () => {
                   <IonIcon icon={saveOutline} />
                 </IonButton>
               </IonItem>
+
+              <IonItem
+                lines="full"
+                button
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <IonIcon icon={imageOutline} slot="start" color="primary" />
+                <IonLabel>Ubah Ikon Aplikasi (Favicon)</IonLabel>
+                <IonIcon
+                  icon={openOutline}
+                  slot="end"
+                  color="medium"
+                  size="small"
+                />
+              </IonItem>
+
               <IonItem lines="none">
                 <IonIcon
                   icon={colorPaletteOutline}
