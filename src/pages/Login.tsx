@@ -52,6 +52,35 @@ const Login: React.FC = () => {
         JSON.stringify(response.data.user),
       );
 
+      try {
+        const resSettings = await api.get("/company/settings");
+        if (resSettings.data.app_name) {
+          localStorage.setItem(
+            "centrawork_app_name",
+            resSettings.data.app_name,
+          );
+          document.title = resSettings.data.app_name;
+          setAppName(resSettings.data.app_name);
+        }
+        if (resSettings.data.app_icon) {
+          localStorage.setItem(
+            "centrawork_app_icon",
+            resSettings.data.app_icon,
+          );
+          let link = document.querySelector(
+            "link[rel~='icon']",
+          ) as HTMLLinkElement;
+          if (!link) {
+            link = document.createElement("link");
+            link.rel = "icon";
+            document.head.appendChild(link);
+          }
+          link.href = resSettings.data.app_icon;
+        }
+      } catch (settingsError) {
+        console.warn("Pengaturan khusus klien belum disetel.", settingsError);
+      }
+
       const userLevel = response.data.user.level_akses;
 
       present({

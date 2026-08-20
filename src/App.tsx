@@ -68,6 +68,7 @@ import AppSettings from "./pages/AppSettings";
 import ChangePassword from "./pages/ChangePassword";
 import RoleManagement from "./pages/RoleManagement";
 import CompanyManagement from "./pages/CompanyManagement";
+import api from "./api";
 
 setupIonicReact();
 
@@ -316,7 +317,7 @@ const SidebarMenu: React.FC = () => {
                       color={isMenuSelected("/reports") ? "primary" : "medium"}
                     />
                     <IonLabel style={getLabelStyle("/reports")}>
-                      Laporan & Ranking
+                      Ranking
                     </IonLabel>
                   </IonItem>
                 )}
@@ -353,6 +354,39 @@ const MainLayout: React.FC = () => {
   useEffect(() => {
     setRole(getActiveRole());
   }, [location.pathname]);
+
+  useEffect(() => {
+    const fetchGlobalSettings = async () => {
+      try {
+        const token = localStorage.getItem("centrawork_token");
+        if (!token) return;
+
+        const res = await api.get("/company/settings");
+        if (res.data.app_name) {
+          localStorage.setItem("centrawork_app_name", res.data.app_name);
+          document.title = res.data.app_name;
+        }
+        if (res.data.app_icon) {
+          localStorage.setItem("centrawork_app_icon", res.data.app_icon);
+          let link = document.querySelector(
+            "link[rel~='icon']",
+          ) as HTMLLinkElement;
+          if (!link) {
+            link = document.createElement("link");
+            link.rel = "icon";
+            document.head.appendChild(link);
+          }
+          link.href = res.data.app_icon;
+        }
+      } catch (error) {
+        console.warn(
+          "Pengaturan kustom perusahaan belum memuat sempurna:",
+          error,
+        );
+      }
+    };
+    fetchGlobalSettings();
+  }, []);
 
   const isManagement = role === "Manajemen";
 

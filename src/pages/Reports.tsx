@@ -110,7 +110,7 @@ const Reports: React.FC = () => {
             <IonMenuButton />
           </IonButtons>
           <IonTitle>
-            <b>Laporan & Log Sistem</b>
+            <b>{isExecutive ? "Laporan, Ranking & Log Sistem" : "Ranking"}</b>
           </IonTitle>
         </IonToolbar>
 
