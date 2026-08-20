@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cron from "node-cron";
@@ -27,6 +27,15 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => console.log("🔴 Klien terputus:", socket.id));
 });
 
+interface DecodedToken {
+  id: string;
+  email: string;
+  role: string;
+  nama_lengkap: string;
+  level_akses: number;
+  company_id: string | null;
+}
+
 const catatAudit = async (
   userId: string,
   aktor: string,
@@ -34,8 +43,20 @@ const catatAudit = async (
   detail: string,
 ) => {
   try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { role: true },
+    });
+    if (user?.role?.level_akses === 0) return;
+
     await prisma.auditLog.create({
-      data: { user_id: userId, aktor, aksi, detail },
+      data: {
+        user_id: userId,
+        company_id: user?.company_id,
+        aktor,
+        aksi,
+        detail,
+      },
     });
   } catch (error) {
     console.error("Gagal mencatat audit log:", error);
@@ -43,7 +64,7 @@ const catatAudit = async (
 };
 
 // ==========================================
-// 1. ROUTE AUTENTIKASI & PASSWORD
+// 1. ROUTE AUTENTIKASI & MULTI-TENANT
 // ==========================================
 app.post("/api/auth/register", async (req: Request, res: Response) => {
   try {
@@ -54,41 +75,48 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser)
-      return res.status(400).json({ error: "Email sudah terdaftar!" });
+      return res.status(400).json({
+        error:
+          "Gagal: Email ini sudah digunakan oleh pengguna lain di server. Silakan gunakan alamat email lain.",
+      });
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
+
+    let companyIdToAssign: string | null = null;
+    let namaAktor = "Sistem / Guest";
+    let aktorId = "";
+
+    const token = req.header("Authorization")?.split(" ")[1];
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET) as DecodedToken;
+        companyIdToAssign = decoded.company_id;
+        namaAktor = decoded.nama_lengkap || decoded.email;
+        aktorId = decoded.id;
+      } catch (jwtError) {
+        console.warn("Token JWT Register Invalid:", jwtError);
+      }
+    }
+
     const newUser = await prisma.user.create({
       data: {
         nama_lengkap,
         email,
         password: hashedPassword,
         role_id: role_id || 6,
+        company_id: companyIdToAssign,
       },
     });
 
-    let namaAktor = "Sistem / Guest";
-    let aktorId = newUser.id;
-    const token = req.header("Authorization")?.split(" ")[1];
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET) as {
-          id: string;
-          nama_lengkap?: string;
-          email?: string;
-        };
-        namaAktor = decoded.nama_lengkap || decoded.email || namaAktor;
-        aktorId = decoded.id || aktorId;
-      } catch {
-        // Abaikan jika token tidak valid
-      }
+    if (aktorId) {
+      await catatAudit(
+        aktorId,
+        namaAktor,
+        "TAMBAH PENGGUNA",
+        `Mendaftarkan akun baru: ${nama_lengkap}`,
+      );
     }
-    await catatAudit(
-      aktorId,
-      namaAktor,
-      "TAMBAH PENGGUNA",
-      `Mendaftarkan akun baru: ${nama_lengkap}`,
-    );
 
     res.status(201).json({ message: "Registrasi berhasil!", user: newUser });
   } catch (error) {
@@ -102,12 +130,31 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
     const { email, password } = req.body;
     const user = await prisma.user.findUnique({
       where: { email },
-      include: { role: true },
+      include: { role: true, company: true },
     });
+
     if (!user) return res.status(404).json({ error: "Akun tidak ditemukan!" });
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ error: "Password salah!" });
+
+    if (user.role.level_akses !== 0 && user.company_id) {
+      if (
+        user.company &&
+        user.company.masa_sewa_habis &&
+        new Date() > new Date(user.company.masa_sewa_habis)
+      ) {
+        return res.status(403).json({
+          error:
+            "Masa sewa aplikasi perusahaan Anda telah berakhir. Silakan hubungi Vendor.",
+        });
+      }
+      if (user.company && !user.company.status_aktif) {
+        return res
+          .status(403)
+          .json({ error: "Perusahaan Anda sedang dinonaktifkan." });
+      }
+    }
 
     const token = jwt.sign(
       {
@@ -116,6 +163,7 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
         role: user.role.nama_role,
         nama_lengkap: user.nama_lengkap,
         level_akses: user.role.level_akses,
+        company_id: user.company_id,
       },
       JWT_SECRET,
       { expiresIn: "1d" },
@@ -126,6 +174,7 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
       "LOGIN",
       "Pengguna melakukan login ke sistem.",
     );
+
     res.json({
       message: "Login sukses!",
       token,
@@ -136,6 +185,7 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
         role: user.role.nama_role,
         level_akses: user.role.level_akses,
         foto_profil: user.foto_profil,
+        company_id: user.company_id,
       },
     });
   } catch (error) {
@@ -144,18 +194,35 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
   }
 });
 
-const authenticate = (
+const authenticate = async (
   req: Request,
   res: Response,
   next: express.NextFunction,
-): void => {
+): Promise<void> => {
   const token = req.header("Authorization")?.split(" ")[1];
   if (!token) {
     res.status(401).json({ error: "Akses ditolak." });
     return;
   }
   try {
-    res.locals.user = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET) as DecodedToken;
+
+    if (decoded.level_akses !== 0 && decoded.company_id) {
+      const company = await prisma.company.findUnique({
+        where: { id: decoded.company_id },
+      });
+      if (
+        company?.masa_sewa_habis &&
+        new Date() > new Date(company.masa_sewa_habis)
+      ) {
+        res
+          .status(403)
+          .json({ error: "SEWA_HABIS", message: "Masa sewa berakhir." });
+        return;
+      }
+    }
+
+    res.locals.user = decoded;
     next();
   } catch (error) {
     console.error("JWT Error:", error);
@@ -168,7 +235,19 @@ const authenticate = (
 // ==========================================
 app.get("/api/roles", authenticate, async (req: Request, res: Response) => {
   try {
+    const userCompany = res.locals.user.company_id;
+    const userLevel = res.locals.user.level_akses;
+
+    const whereClause: Prisma.RoleWhereInput =
+      userLevel !== 0
+        ? {
+            level_akses: { gt: 0 },
+            OR: [{ company_id: null }, { company_id: userCompany }],
+          }
+        : {};
+
     const roles = await prisma.role.findMany({
+      where: whereClause,
       orderBy: { level_akses: "asc" },
     });
     res.json(roles);
@@ -178,9 +257,120 @@ app.get("/api/roles", authenticate, async (req: Request, res: Response) => {
   }
 });
 
+app.post("/api/roles", authenticate, async (req: Request, res: Response) => {
+  try {
+    if (res.locals.user.role !== "Super Admin")
+      return res.status(403).json({ error: "Akses ditolak." });
+
+    const { nama_role, level_akses } = req.body;
+    if (!nama_role)
+      return res.status(400).json({ error: "Nama divisi wajib diisi." });
+
+    const level = level_akses && level_akses >= 3 ? Number(level_akses) : 3;
+    const newRole = await prisma.role.create({
+      data: {
+        nama_role,
+        level_akses: level,
+        company_id: res.locals.user.company_id,
+      },
+    });
+
+    await catatAudit(
+      res.locals.user.id,
+      res.locals.user.nama_lengkap,
+      "TAMBAH DIVISI",
+      `Membuat divisi: ${nama_role}`,
+    );
+    res
+      .status(201)
+      .json({ message: "Divisi berhasil ditambahkan!", role: newRole });
+  } catch (error) {
+    console.error("Eror Tambah Role:", error);
+    res.status(500).json({ error: "Gagal menambah divisi." });
+  }
+});
+
+app.put("/api/roles/:id", authenticate, async (req: Request, res: Response) => {
+  try {
+    if (res.locals.user.role !== "Super Admin")
+      return res.status(403).json({ error: "Akses ditolak." });
+
+    const roleId = parseInt(req.params.id as string);
+    const targetRole = await prisma.role.findUnique({ where: { id: roleId } });
+
+    if (!targetRole || targetRole.company_id !== res.locals.user.company_id)
+      return res.status(404).json({ error: "Divisi tidak ditemukan." });
+    if (targetRole.level_akses < 3)
+      return res.status(403).json({ error: "Divisi Inti tidak boleh diubah." });
+
+    const updatedRole = await prisma.role.update({
+      where: { id: roleId },
+      data: { nama_role: req.body.nama_role },
+    });
+    await catatAudit(
+      res.locals.user.id,
+      res.locals.user.nama_lengkap,
+      "EDIT DIVISI",
+      `Mengubah nama divisi menjadi ${req.body.nama_role}`,
+    );
+    res.json({ message: "Divisi diperbarui!", role: updatedRole });
+  } catch (error) {
+    console.error("Eror Edit Role:", error);
+    res.status(500).json({ error: "Gagal memperbarui divisi." });
+  }
+});
+
+app.delete(
+  "/api/roles/:id",
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      if (res.locals.user.role !== "Super Admin")
+        return res.status(403).json({ error: "Akses ditolak." });
+
+      const roleId = parseInt(req.params.id as string);
+      const targetRole = await prisma.role.findUnique({
+        where: { id: roleId },
+      });
+
+      if (!targetRole || targetRole.company_id !== res.locals.user.company_id)
+        return res.status(404).json({ error: "Divisi tidak ditemukan." });
+      if (targetRole.level_akses < 3)
+        return res
+          .status(403)
+          .json({ error: "Divisi Inti tidak boleh dihapus." });
+
+      const usersWithRole = await prisma.user.count({
+        where: { role_id: roleId, company_id: res.locals.user.company_id },
+      });
+      if (usersWithRole > 0)
+        return res
+          .status(400)
+          .json({ error: `Gagal! Masih ada karyawan di divisi ini.` });
+
+      await prisma.role.delete({ where: { id: roleId } });
+      await catatAudit(
+        res.locals.user.id,
+        res.locals.user.nama_lengkap,
+        "HAPUS DIVISI",
+        `Menghapus divisi: ${targetRole.nama_role}`,
+      );
+      res.json({ message: "Divisi berhasil dihapus." });
+    } catch (error) {
+      console.error("Eror Hapus Role:", error);
+      res.status(500).json({ error: "Gagal menghapus divisi." });
+    }
+  },
+);
+
 app.get("/api/users", authenticate, async (req: Request, res: Response) => {
   try {
+    const userCompany = res.locals.user.company_id;
+    const whereClause: Prisma.UserWhereInput =
+      res.locals.user.level_akses === 0 ? {} : { company_id: userCompany };
+
     const users = await prisma.user.findMany({
+      where: whereClause,
       select: {
         id: true,
         nama_lengkap: true,
@@ -202,13 +392,28 @@ app.delete(
   authenticate,
   async (req: Request, res: Response) => {
     try {
-      if (res.locals.user.role === "Super HR")
+      const targetUser = await prisma.user.findUnique({
+        where: { id: req.params.id as string },
+        include: { role: true },
+      });
+
+      if (
+        targetUser?.role?.level_akses === 0 &&
+        res.locals.user.level_akses !== 0
+      ) {
+        return res
+          .status(403)
+          .json({ error: "Akun Manajemen tidak dapat dihapus." });
+      }
+      if (
+        res.locals.user.role === "Super HR" &&
+        targetUser?.role?.level_akses !== 0
+      ) {
         return res
           .status(403)
           .json({ error: "Super HR tidak memiliki akses hapus." });
-      const targetUser = await prisma.user.findUnique({
-        where: { id: req.params.id as string },
-      });
+      }
+
       await prisma.user.delete({ where: { id: req.params.id as string } });
       const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       const namaTarget = targetUser?.nama_lengkap || req.params.id;
@@ -231,13 +436,15 @@ app.delete(
 // ==========================================
 app.get("/api/dashboard", authenticate, async (req: Request, res: Response) => {
   try {
-    const userId = res.locals.user.id;
     const profileData = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: res.locals.user.id },
       include: { role: true },
     });
     const taskData = await prisma.taskAssignment.findMany({
-      where: { penerima_id: userId },
+      where: {
+        penerima_id: res.locals.user.id,
+        task: { company_id: res.locals.user.company_id },
+      },
       include: { task: { select: { judul_tugas: true, jenis_tugas: true } } },
       orderBy: { diselesaikan_pada: "desc" },
     });
@@ -250,12 +457,18 @@ app.get("/api/dashboard", authenticate, async (req: Request, res: Response) => {
 
 app.get("/api/tasks", authenticate, async (req: Request, res: Response) => {
   try {
-    const userRole = res.locals.user.role;
-    const userId = res.locals.user.id;
-    let whereClause = {};
-    if (userRole !== "Super Admin" && userRole !== "Super HR") {
-      whereClause = { penerima_id: userId };
+    const userCompany = res.locals.user.company_id;
+    const whereClause: Prisma.TaskAssignmentWhereInput = {
+      task: { company_id: userCompany },
+    };
+
+    if (
+      res.locals.user.role !== "Super Admin" &&
+      res.locals.user.role !== "Super HR"
+    ) {
+      whereClause.penerima_id = res.locals.user.id;
     }
+
     const taskData = await prisma.taskAssignment.findMany({
       where: whereClause,
       include: {
@@ -280,7 +493,54 @@ app.get("/api/tasks", authenticate, async (req: Request, res: Response) => {
   }
 });
 
-// PERBAIKAN: Menerima foto_bukti pada pembaruan tugas
+app.post("/api/tasks", authenticate, async (req: Request, res: Response) => {
+  try {
+    const { judul_tugas, deskripsi, jenis_tugas, penerima_id, tenggat_waktu } =
+      req.body;
+    let deadline = null;
+    if (tenggat_waktu) {
+      const d = new Date(tenggat_waktu);
+      d.setHours(23, 59, 59, 999);
+      deadline = d;
+    }
+
+    const newTask = await prisma.task.create({
+      data: {
+        company_id: res.locals.user.company_id,
+        pembuat_id: res.locals.user.id,
+        judul_tugas,
+        deskripsi,
+        jenis_tugas,
+        tenggat_waktu: deadline,
+      },
+    });
+
+    let penerimaArray: string[] = [];
+    if (jenis_tugas === "Mandiri") penerimaArray = [res.locals.user.id];
+    else
+      penerimaArray = Array.isArray(penerima_id) ? penerima_id : [penerima_id];
+
+    const assignments = penerimaArray.map((id) => ({
+      task_id: newTask.id,
+      penerima_id: id,
+      status: "Pending",
+    }));
+    await prisma.taskAssignment.createMany({ data: assignments });
+
+    await catatAudit(
+      res.locals.user.id,
+      res.locals.user.nama_lengkap,
+      "BUAT TUGAS BARU",
+      `Judul: "${judul_tugas}"`,
+    );
+    io.emit("refresh_data");
+    res.status(201).json({ message: "Tugas berhasil dibuat!" });
+  } catch (error) {
+    console.error("Eror Buat Tugas:", error);
+    res.status(500).json({ error: "Gagal membuat tugas." });
+  }
+});
+
 app.patch(
   "/api/tasks/:id/status",
   authenticate,
@@ -311,18 +571,17 @@ app.patch(
         data: updateData,
       });
 
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       const judulTugas = assignmentInfo?.task?.judul_tugas || "Tugas";
       const pesanLog =
         status === "Selesai"
           ? `Menyelesaikan tugas: "${judulTugas}"`
           : status
-            ? `Mengubah status tugas "${judulTugas}" menjadi ${status}`
-            : `Menyimpan bukti/laporan pada tugas "${judulTugas}"`;
+            ? `Mengubah status tugas menjadi ${status}`
+            : `Menyimpan bukti/laporan pada tugas`;
 
       await catatAudit(
         res.locals.user.id,
-        namaAktor,
+        res.locals.user.nama_lengkap,
         status === "Selesai" ? "SELESAIKAN TUGAS" : "UBAH STATUS TUGAS",
         pesanLog,
       );
@@ -335,66 +594,39 @@ app.patch(
   },
 );
 
-app.post("/api/tasks", authenticate, async (req: Request, res: Response) => {
+app.put("/api/tasks/:id", authenticate, async (req: Request, res: Response) => {
   try {
-    const { judul_tugas, deskripsi, jenis_tugas, penerima_id, tenggat_waktu } =
-      req.body;
-    const pembuatId = res.locals.user.id;
-
-    let deadline = null;
-    if (tenggat_waktu) {
-      const d = new Date(tenggat_waktu);
-      d.setHours(23, 59, 59, 999);
-      deadline = d;
-    }
-
-    const newTask = await prisma.task.create({
-      data: {
-        pembuat_id: pembuatId,
-        judul_tugas,
-        deskripsi,
-        jenis_tugas,
-        tenggat_waktu: deadline,
-      },
+    const { judul_tugas, deskripsi } = req.body;
+    const assignment = await prisma.taskAssignment.findUnique({
+      where: { id: req.params.id as string },
+      include: { task: true },
     });
-
-    let penerimaArray: string[] = [];
-    if (jenis_tugas === "Mandiri") {
-      penerimaArray = [pembuatId];
+    if (assignment && assignment.task) {
+      await prisma.task.update({
+        where: { id: assignment.task.id },
+        data: { judul_tugas, deskripsi },
+      });
+      await catatAudit(
+        res.locals.user.id,
+        res.locals.user.nama_lengkap,
+        "EDIT TUGAS MANDIRI",
+        `Mengubah tugas: "${judul_tugas}"`,
+      );
+      io.emit("refresh_data");
+      res.json({ message: "Tugas berhasil diperbarui!" });
     } else {
-      if (Array.isArray(penerima_id)) {
-        penerimaArray = penerima_id;
-      } else if (penerima_id) {
-        penerimaArray = [penerima_id];
-      }
+      res.status(404).json({ error: "Tugas tidak ditemukan." });
     }
-
-    const assignments = penerimaArray.map((id) => ({
-      task_id: newTask.id,
-      penerima_id: id,
-      status: "Pending",
-    }));
-    await prisma.taskAssignment.createMany({ data: assignments });
-
-    const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
-    await catatAudit(
-      pembuatId,
-      namaAktor,
-      "BUAT TUGAS BARU",
-      `Judul: "${judul_tugas}" ditugaskan ke ${penerimaArray.length} orang.`,
-    );
-    io.emit("refresh_data");
-    res.status(201).json({ message: "Tugas berhasil dibuat!" });
   } catch (error) {
-    console.error("Eror Buat Tugas:", error);
-    res.status(500).json({ error: "Gagal membuat tugas." });
+    console.error("Eror Update Tugas:", error);
+    res.status(500).json({ error: "Gagal memperbarui tugas." });
   }
 });
 
 app.get("/api/reports", authenticate, async (req: Request, res: Response) => {
   try {
     const users = await prisma.user.findMany({
-      where: { status_aktif: true },
+      where: { status_aktif: true, company_id: res.locals.user.company_id },
       select: {
         id: true,
         nama_lengkap: true,
@@ -403,16 +635,16 @@ app.get("/api/reports", authenticate, async (req: Request, res: Response) => {
       },
     });
     const assignments = await prisma.taskAssignment.findMany({
+      where: { task: { company_id: res.locals.user.company_id } },
       include: { task: { select: { poin: true } } },
     });
+
     const stats = users.map((user) => {
       const userTasks = assignments.filter((a) => a.penerima_id === user.id);
       const totalTugas = userTasks.length;
-
       const selesai = userTasks.filter((a) => a.status === "Selesai");
       const pending = userTasks.filter((a) => a.status === "Pending");
       const gagal = userTasks.filter((a) => a.status === "Tidak Dikerjakan");
-
       const totalPoin = selesai.reduce(
         (acc, curr) => acc + (curr.task?.poin || 0),
         0,
@@ -446,7 +678,7 @@ app.get(
   async (req: Request, res: Response) => {
     try {
       const users = await prisma.user.findMany({
-        where: { status_aktif: true },
+        where: { status_aktif: true, company_id: res.locals.user.company_id },
         select: {
           id: true,
           nama_lengkap: true,
@@ -454,6 +686,7 @@ app.get(
         },
       });
       const assignments = await prisma.taskAssignment.findMany({
+        where: { task: { company_id: res.locals.user.company_id } },
         include: { task: { select: { poin: true } } },
       });
       const workbook = new excelJS.Workbook();
@@ -516,10 +749,17 @@ app.get(
     try {
       if (
         res.locals.user.role !== "Super Admin" &&
-        res.locals.user.role !== "Super HR"
+        res.locals.user.role !== "Super HR" &&
+        res.locals.user.role !== "Manajemen"
       )
         return res.status(403).json({ error: "Akses ditolak." });
+
+      const whereClause: Prisma.AuditLogWhereInput = {
+        company_id: res.locals.user.company_id,
+      };
+
       const logs = await prisma.auditLog.findMany({
+        where: whereClause,
         orderBy: { waktu: "desc" },
         take: 150,
       });
@@ -540,9 +780,17 @@ app.get(
   async (req: Request, res: Response) => {
     try {
       const tasks = await prisma.defaultTask.findMany({
+        where: { company_id: res.locals.user.company_id },
         orderBy: { created_at: "desc" },
       });
-      const roles = await prisma.role.findMany();
+      const roles = await prisma.role.findMany({
+        where: {
+          OR: [
+            { company_id: null },
+            { company_id: res.locals.user.company_id },
+          ],
+        },
+      });
       const formattedTasks = tasks.map((task) => {
         if (task.target_role_id === 0)
           return { ...task, role: { nama_role: "Seluruh Divisi" } };
@@ -571,6 +819,7 @@ app.post(
       } = req.body;
       const newTask = await prisma.defaultTask.create({
         data: {
+          company_id: res.locals.user.company_id,
           judul_tugas,
           deskripsi,
           target_role_id,
@@ -578,15 +827,12 @@ app.post(
           status_aktif,
         },
       });
-
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       await catatAudit(
         res.locals.user.id,
-        namaAktor,
+        res.locals.user.nama_lengkap,
         "BUAT TUGAS RUTIN",
-        `Membuat template tugas rutin: "${newTask.judul_tugas}"`,
+        `Template: "${newTask.judul_tugas}"`,
       );
-
       res.status(201).json({ message: "Tugas rutin berhasil disimpan!" });
     } catch (error) {
       console.error("Eror Tambah Tugas Default:", error);
@@ -617,15 +863,12 @@ app.put(
           status_aktif,
         },
       });
-
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       await catatAudit(
         res.locals.user.id,
-        namaAktor,
+        res.locals.user.nama_lengkap,
         "EDIT TUGAS RUTIN",
-        `Memperbarui template tugas rutin: "${updatedTask.judul_tugas}"`,
+        `Template: "${updatedTask.judul_tugas}"`,
       );
-
       res.json({ message: "Tugas rutin diperbarui!", task: updatedTask });
     } catch (error) {
       console.error("Eror Update Tugas Default:", error);
@@ -643,22 +886,18 @@ app.delete(
         return res
           .status(403)
           .json({ error: "Super HR tidak memiliki akses hapus." });
-
       const targetTask = await prisma.defaultTask.findUnique({
         where: { id: req.params.id as string },
       });
       await prisma.defaultTask.delete({
         where: { id: req.params.id as string },
       });
-
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       await catatAudit(
         res.locals.user.id,
-        namaAktor,
+        res.locals.user.nama_lengkap,
         "HAPUS TUGAS RUTIN",
-        `Menghapus template tugas rutin: "${targetTask?.judul_tugas || req.params.id}"`,
+        `Template: "${targetTask?.judul_tugas}"`,
       );
-
       res.json({ message: "Tugas rutin dihapus." });
     } catch (error) {
       console.error("Eror Hapus Tugas Default:", error);
@@ -699,17 +938,20 @@ app.post(
   async (req: Request, res: Response) => {
     try {
       const { judul, pesan, targetPenerima } = req.body;
-      const pengirimId = res.locals.user.id;
-      const users =
-        targetPenerima === "semua"
-          ? await prisma.user.findMany({
-              where: { status_aktif: true },
-              select: { id: true },
-            })
-          : await prisma.user.findMany({
-              where: { status_aktif: true, role_id: parseInt(targetPenerima) },
-              select: { id: true },
-            });
+
+      const userQuery: Prisma.UserWhereInput = {
+        status_aktif: true,
+        company_id: res.locals.user.company_id,
+      };
+
+      if (targetPenerima !== "semua") {
+        userQuery.role_id = parseInt(targetPenerima);
+      }
+
+      const users = await prisma.user.findMany({
+        where: userQuery,
+        select: { id: true },
+      });
 
       if (!users || users.length === 0)
         return res
@@ -718,7 +960,8 @@ app.post(
 
       const newNotif = await prisma.notification.create({
         data: {
-          pengirim_id: pengirimId,
+          company_id: res.locals.user.company_id,
+          pengirim_id: res.locals.user.id,
           judul_notifikasi: judul,
           isi_pesan: pesan,
         },
@@ -729,10 +972,9 @@ app.post(
       }));
       await prisma.userNotification.createMany({ data: userNotifData });
 
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       await catatAudit(
-        pengirimId,
-        namaAktor,
+        res.locals.user.id,
+        res.locals.user.nama_lengkap,
         "KIRIM NOTIFIKASI",
         `Menyiarkan: "${judul}"`,
       );
@@ -782,34 +1024,36 @@ app.patch(
 );
 
 // =====================================
-// 5. SISTEM ROBOT CRON JOB
+// 5. SISTEM ROBOT CRON JOB MULTI TENANT
 // =====================================
 cron.schedule("0 7 * * *", async () => {
   try {
+    const activeCompanies = await prisma.company.findMany({
+      where: {
+        status_aktif: true,
+        OR: [
+          { masa_sewa_habis: null },
+          { masa_sewa_habis: { gt: new Date() } },
+        ],
+      },
+    });
+    const companyIds = activeCompanies.map((c) => c.id);
+
     const activeDefaultTasks = await prisma.defaultTask.findMany({
-      where: { status_aktif: true },
+      where: { status_aktif: true, company_id: { in: companyIds } },
     });
 
-    for (const taskItem of activeDefaultTasks) {
-      const defaultTask = taskItem as unknown as {
-        judul_tugas: string;
-        deskripsi: string | null;
-        target_role_id: number;
-        jam_tenggat: string | null;
-      };
-
-      let targetUsers: { id: string }[] = [];
-      if (defaultTask.target_role_id === 0) {
-        targetUsers = await prisma.user.findMany({
-          where: { status_aktif: true },
-          select: { id: true },
-        });
-      } else {
-        targetUsers = await prisma.user.findMany({
-          where: { role_id: defaultTask.target_role_id, status_aktif: true },
-          select: { id: true },
-        });
-      }
+    for (const defaultTask of activeDefaultTasks) {
+      const targetUsers = await prisma.user.findMany({
+        where: {
+          company_id: defaultTask.company_id,
+          status_aktif: true,
+          ...(defaultTask.target_role_id !== 0 && {
+            role_id: defaultTask.target_role_id,
+          }),
+        },
+        select: { id: true },
+      });
 
       if (targetUsers.length > 0) {
         let deadline = null;
@@ -825,9 +1069,9 @@ cron.schedule("0 7 * * *", async () => {
             0,
           );
         }
-
         const newTask = await prisma.task.create({
           data: {
+            company_id: defaultTask.company_id,
             judul_tugas: defaultTask.judul_tugas,
             deskripsi: defaultTask.deskripsi,
             jenis_tugas: "Rutin",
@@ -844,35 +1088,38 @@ cron.schedule("0 7 * * *", async () => {
       }
     }
   } catch (error) {
-    console.error("❌ Gagal menjalankan Robot Tugas Rutin:", error);
+    console.error("❌ Gagal Robot Rutin:", error);
   }
 });
 
 cron.schedule("* * * * *", async () => {
   try {
-    const now = new Date();
     const expiredAssignments = await prisma.taskAssignment.findMany({
-      where: { status: "Pending", task: { tenggat_waktu: { lt: now } } },
-      include: { task: true },
+      where: { status: "Pending", task: { tenggat_waktu: { lt: new Date() } } },
+      include: { task: true, penerima: true },
     });
-
     if (expiredAssignments.length > 0) {
       for (const assignment of expiredAssignments) {
         await prisma.taskAssignment.update({
           where: { id: assignment.id },
           data: { status: "Tidak Dikerjakan" },
         });
-        await catatAudit(
-          assignment.penerima_id,
-          "Sistem Otomatis",
-          "TUGAS KADALUWARSA",
-          `Tugas "${assignment.task?.judul_tugas}" melewati batas waktu dan ditandai sebagai Tidak Dikerjakan.`,
-        );
+        if (assignment.penerima.company_id) {
+          await prisma.auditLog.create({
+            data: {
+              user_id: assignment.penerima_id,
+              company_id: assignment.penerima.company_id,
+              aktor: "Sistem Otomatis",
+              aksi: "TUGAS KADALUWARSA",
+              detail: `Tugas otomatis Gagal.`,
+            },
+          });
+        }
       }
       io.emit("refresh_data");
     }
   } catch (error) {
-    console.error("❌ Gagal menjalankan Robot Kedaluwarsa:", error);
+    console.error("❌ Gagal Robot Expired:", error);
   }
 });
 
@@ -907,12 +1154,11 @@ app.put(
         data: { password: hashedPassword },
       });
 
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       await catatAudit(
         userId,
-        namaAktor,
-        "GANTI PASSWORD MANDIRI",
-        "Mengubah password milik sendiri.",
+        res.locals.user.nama_lengkap,
+        "GANTI PASSWORD",
+        "Mengubah password.",
       );
       res.json({ message: "Password berhasil diubah!" });
     } catch (error) {
@@ -945,23 +1191,37 @@ app.put("/api/users/:id", authenticate, async (req: Request, res: Response) => {
 
     const targetUser = await prisma.user.findUnique({
       where: { id: req.params.id as string },
+      include: { role: true },
     });
+
+    if (
+      targetUser?.role?.level_akses === 0 &&
+      res.locals.user.level_akses !== 0
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Akun Manajemen tidak dapat diedit." });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: req.params.id as string },
       data: updateData,
     });
-    const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
-    const namaTarget = targetUser?.nama_lengkap || updatedUser.nama_lengkap;
     await catatAudit(
       res.locals.user.id,
-      namaAktor,
+      res.locals.user.nama_lengkap,
       "EDIT PENGGUNA",
-      `Memperbarui data akun milik: ${namaTarget}`,
+      `Update data: ${updatedUser.nama_lengkap}`,
     );
-
     res.json({ message: "Data pengguna diperbarui!", user: updatedUser });
   } catch (error) {
     console.error("Eror Update User:", error);
+    const err = error as { code?: string };
+    if (err.code === "P2002") {
+      return res.status(400).json({
+        error: "Gagal: Email ini sudah digunakan oleh pengguna lain di server.",
+      });
+    }
     res.status(500).json({ error: "Gagal memperbarui pengguna." });
   }
 });
@@ -976,15 +1236,12 @@ app.put(
         where: { id: req.params.id as string },
         data: { foto_profil },
       });
-
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
       await catatAudit(
         res.locals.user.id,
-        namaAktor,
-        "UBAH FOTO PROFIL",
-        "Memperbarui foto profil akun.",
+        res.locals.user.nama_lengkap,
+        "UBAH FOTO",
+        "Memperbarui foto.",
       );
-
       res.json({ message: "Foto profil disimpan ke database!" });
     } catch (error) {
       console.error("Eror Simpan Foto:", error);
@@ -999,31 +1256,31 @@ app.put(
   async (req: Request, res: Response) => {
     try {
       const { newPassword } = req.body;
-
       if (!newPassword || newPassword.length < 6)
-        return res
-          .status(400)
-          .json({ error: "Password baru minimal 6 karakter!" });
-
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(newPassword, salt);
+        return res.status(400).json({ error: "Minimal 6 karakter!" });
 
       const targetUser = await prisma.user.findUnique({
         where: { id: req.params.id as string },
+        include: { role: true },
       });
+      if (
+        targetUser?.role?.level_akses === 0 &&
+        res.locals.user.level_akses !== 0
+      ) {
+        return res.status(403).json({ error: "Gagal reset password." });
+      }
+
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(newPassword, salt);
       await prisma.user.update({
         where: { id: req.params.id as string },
         data: { password: hashedPassword },
       });
-
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
-      const namaTarget = targetUser?.nama_lengkap || req.params.id;
-
       await catatAudit(
         res.locals.user.id,
-        namaAktor,
-        "RESET PASSWORD KARYAWAN",
-        `Me-reset password milik: ${namaTarget}`,
+        res.locals.user.nama_lengkap,
+        "RESET PASSWORD",
+        `Reset sandi karyawan.`,
       );
       res.json({ message: "Password karyawan berhasil direset!" });
     } catch (error) {
@@ -1033,37 +1290,163 @@ app.put(
   },
 );
 
-app.put("/api/tasks/:id", authenticate, async (req: Request, res: Response) => {
+// ==========================================
+// 7. API MANAJEMEN SAAS (HANYA UNTUK VENDOR)
+// ==========================================
+app.get("/api/companies", authenticate, async (req: Request, res: Response) => {
   try {
-    const { judul_tugas, deskripsi } = req.body;
-    const assignment = await prisma.taskAssignment.findUnique({
-      where: { id: req.params.id as string },
-      include: { task: true },
+    if (res.locals.user.level_akses !== 0)
+      return res.status(403).json({ error: "Akses Ditolak." });
+    const companies = await prisma.company.findMany({
+      include: { users: { where: { role_id: 2 } } },
+      orderBy: { created_at: "desc" },
     });
-    if (assignment && assignment.task) {
-      await prisma.task.update({
-        where: { id: assignment.task.id },
-        data: { judul_tugas, deskripsi },
-      });
-
-      const namaAktor = res.locals.user.nama_lengkap || res.locals.user.email;
-      await catatAudit(
-        res.locals.user.id,
-        namaAktor,
-        "EDIT TUGAS MANDIRI",
-        `Mengubah detail tugas: "${judul_tugas}"`,
-      );
-
-      io.emit("refresh_data");
-      res.json({ message: "Tugas berhasil diperbarui!" });
-    } else {
-      res.status(404).json({ error: "Tugas tidak ditemukan." });
-    }
+    res.json(companies);
   } catch (error) {
-    console.error("Eror Update Tugas Mandiri:", error);
-    res.status(500).json({ error: "Gagal memperbarui tugas." });
+    console.error("Eror get companies:", error);
+    res.status(500).json({ error: "Gagal menarik data perusahaan." });
   }
 });
+
+app.post(
+  "/api/companies",
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      if (res.locals.user.level_akses !== 0)
+        return res.status(403).json({ error: "Akses Ditolak." });
+      const {
+        nama_perusahaan,
+        jenis_klien,
+        kontak_wa,
+        masa_sewa_habis,
+        email_admin,
+        password_admin,
+      } = req.body;
+
+      let deadline = null;
+      if (masa_sewa_habis) {
+        const d = new Date(masa_sewa_habis);
+        d.setHours(23, 59, 59, 999);
+        deadline = d;
+      }
+
+      const newCompany = await prisma.company.create({
+        data: {
+          nama_perusahaan,
+          jenis_klien,
+          kontak_wa,
+          masa_sewa_habis: deadline,
+        },
+      });
+
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password_admin, salt);
+      await prisma.user.create({
+        data: {
+          nama_lengkap: `Admin ${nama_perusahaan}`,
+          email: email_admin,
+          password: hashedPassword,
+          role_id: 2,
+          company_id: newCompany.id,
+        },
+      });
+
+      res.status(201).json({ message: "Klien & Akun Admin berhasil dibuat!" });
+    } catch (error) {
+      console.error("Eror create company:", error);
+      res.status(500).json({ error: "Gagal membuat klien." });
+    }
+  },
+);
+
+app.put(
+  "/api/companies/:id",
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      if (res.locals.user.level_akses !== 0)
+        return res.status(403).json({ error: "Akses Ditolak." });
+      const {
+        nama_perusahaan,
+        jenis_klien,
+        kontak_wa,
+        masa_sewa_habis,
+        status_aktif,
+      } = req.body;
+
+      let deadline = null;
+      if (masa_sewa_habis) {
+        const d = new Date(masa_sewa_habis);
+        d.setHours(23, 59, 59, 999);
+        deadline = d;
+      }
+
+      const updated = await prisma.company.update({
+        where: { id: req.params.id as string },
+        data: {
+          nama_perusahaan,
+          jenis_klien,
+          kontak_wa,
+          masa_sewa_habis: deadline,
+          status_aktif,
+        },
+      });
+      io.emit("refresh_data");
+      res.json({ message: "Data sewa diperbarui!", company: updated });
+    } catch (error) {
+      console.error("Eror update company:", error);
+      res.status(500).json({ error: "Gagal update perusahaan." });
+    }
+  },
+);
+
+// ==========================================
+// 8. PENGATURAN KUSTOMISASI KLIEN (WHITE-LABEL)
+// ==========================================
+app.get(
+  "/api/company/settings",
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      const company = await prisma.company.findUnique({
+        where: { id: res.locals.user.company_id },
+        select: { app_name: true, app_icon: true },
+      });
+      res.json(company || {});
+    } catch (error) {
+      console.error("Eror get company settings:", error);
+      res.status(500).json({ error: "Gagal menarik pengaturan." });
+    }
+  },
+);
+
+app.put(
+  "/api/company/settings",
+  authenticate,
+  async (req: Request, res: Response) => {
+    try {
+      if (res.locals.user.role !== "Super Admin")
+        return res.status(403).json({ error: "Akses ditolak." });
+
+      const { app_name, app_icon } = req.body;
+      const updateData: { app_name?: string; app_icon?: string } = {};
+
+      if (app_name !== undefined) updateData.app_name = app_name;
+      if (app_icon !== undefined) updateData.app_icon = app_icon;
+
+      await prisma.company.update({
+        where: { id: res.locals.user.company_id },
+        data: updateData,
+      });
+
+      res.json({ message: "Pengaturan perusahaan diperbarui." });
+    } catch (error) {
+      console.error("Eror update company settings:", error);
+      res.status(500).json({ error: "Gagal menyimpan pengaturan." });
+    }
+  },
+);
 
 httpServer.listen(process.env.PORT || 5000, () => {
   console.log(

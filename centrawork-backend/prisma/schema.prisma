@@ -7,11 +7,35 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// TABEL BARU: Data Penyewa (Tenant)
+model Company {
+  id               String    @id @default(uuid())
+  nama_perusahaan  String
+  jenis_klien      String    @default("Perusahaan")
+  kontak_wa        String?
+  masa_sewa_habis  DateTime?
+  status_aktif     Boolean   @default(true)
+  app_name         String?   @default("Centra Work")
+  app_icon         String?   @db.LongText            
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  users            User[]
+  roles            Role[]
+  tasks            Task[]
+  notifications    Notification[]
+  default_tasks    DefaultTask[]
+  audit_logs       AuditLog[]
+}
+
 // 1. Tabel Master Hak Akses
 model Role {
   id          Int      @id @default(autoincrement())
   nama_role   String
   level_akses Int
+  company_id  String?  // Null berarti Divisi Inti Bawaan Sistem
+  
+  company     Company? @relation(fields: [company_id], references: [id], onDelete: Cascade)
   users       User[]
 }
 
@@ -19,6 +43,7 @@ model Role {
 model User {
   id                String             @id @default(uuid())
   role_id           Int
+  company_id        String?            // Null berarti akun Manajemen (Pemilik SaaS)
   nama_lengkap      String
   email             String             @unique
   password          String             
@@ -26,6 +51,7 @@ model User {
   status_aktif      Boolean            @default(true)
   created_at        DateTime           @default(now())
   
+  company           Company?           @relation(fields: [company_id], references: [id], onDelete: Cascade)
   role              Role               @relation(fields: [role_id], references: [id])
   tasks_created     Task[]             @relation("PembuatTugas")
   tasks_assigned    TaskAssignment[]
@@ -37,14 +63,16 @@ model User {
 // 3. Tabel Data Induk Tugas
 model Task {
   id              String             @id @default(uuid())
+  company_id      String?
   pembuat_id      String?
   judul_tugas     String
   deskripsi       String?            @db.Text
-  jenis_tugas     String             // 'Delegasi', 'Mandiri', 'Rutin'
+  jenis_tugas     String             
   tenggat_waktu   DateTime?
   poin            Int                @default(10)
   created_at      DateTime           @default(now())
   
+  company         Company?           @relation(fields: [company_id], references: [id], onDelete: Cascade)
   pembuat         User?              @relation("PembuatTugas", fields: [pembuat_id], references: [id])
   assignments     TaskAssignment[]
 }
@@ -54,10 +82,11 @@ model TaskAssignment {
   id                String    @id @default(uuid())
   task_id           String
   penerima_id       String
-  status            String    @default("Pending") // 'Pending', 'Selesai', 'Tidak Dikerjakan'
+  status            String    @default("Pending") 
   diselesaikan_pada DateTime?
   laporan           String?   @db.Text
   foto_bukti        String?   @db.LongText
+  
   task              Task      @relation(fields: [task_id], references: [id], onDelete: Cascade)
   penerima          User      @relation(fields: [penerima_id], references: [id], onDelete: Cascade)
 }
@@ -65,11 +94,13 @@ model TaskAssignment {
 // 5. Tabel Data Induk Notifikasi
 model Notification {
   id               String             @id @default(uuid())
+  company_id       String?
   pengirim_id      String?
   judul_notifikasi String
   isi_pesan        String             @db.Text
   created_at       DateTime           @default(now())
   
+  company          Company?           @relation(fields: [company_id], references: [id], onDelete: Cascade)
   pengirim         User?              @relation("PengirimNotif", fields: [pengirim_id], references: [id], onDelete: SetNull)
   receivers        UserNotification[]
 }
@@ -88,22 +119,27 @@ model UserNotification {
 // 7. Tabel Tugas Rutin (Default)
 model DefaultTask {
   id             String   @id @default(uuid())
+  company_id     String?
   judul_tugas    String
   deskripsi      String?  @db.Text
   target_role_id Int
   jam_tenggat    String?
   status_aktif   Boolean  @default(true)
   created_at     DateTime @default(now())
+  
+  company        Company? @relation(fields: [company_id], references: [id], onDelete: Cascade)
 }
 
 // 8. Tabel Log Aktivitas (Audit Trail)
 model AuditLog {
-  id        String   @id @default(uuid())
-  user_id   String
-  aktor     String   // Nama orang yang melakukan aksi
-  aksi      String   // Jenis Aksi (Misal: HAPUS USER, BUAT TUGAS)
-  detail    String   @db.Text // Deskripsi lengkap aksi
-  waktu     DateTime @default(now())
+  id         String   @id @default(uuid())
+  company_id String?
+  user_id    String
+  aktor      String   
+  aksi       String   
+  detail     String   @db.Text 
+  waktu      DateTime @default(now())
   
-  user      User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  company    Company? @relation(fields: [company_id], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }

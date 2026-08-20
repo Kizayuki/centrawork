@@ -55,7 +55,6 @@ const DashboardTab: React.FC = () => {
   });
   const [tugasTerbaru, setTugasTerbaru] = useState<TaskItem[]>([]);
 
-  // Fungsi Pembantu Sinkronisasi Favicon
   const syncFavicon = () => {
     const icon = localStorage.getItem("centrawork_app_icon");
     if (icon) {
@@ -70,7 +69,7 @@ const DashboardTab: React.FC = () => {
   };
 
   useIonViewWillEnter(() => {
-    syncFavicon(); // Terapkan favicon langsung di halaman awal
+    syncFavicon();
 
     const fetchDashboardData = async () => {
       setIsLoading(true);

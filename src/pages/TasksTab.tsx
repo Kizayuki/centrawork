@@ -57,7 +57,6 @@ interface TaskAssignment {
   } | null;
   penerima: { id: string; nama_lengkap: string; role_id?: number } | null;
 }
-
 interface RoleItem {
   id: number;
   nama_role: string;
@@ -68,15 +67,11 @@ const TasksTab: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRole, setSelectedRole] = useState("semua");
   const [statusFilter, setStatusFilter] = useState("semua");
-
   const [tasksList, setTasksList] = useState<TaskAssignment[]>([]);
   const [roles, setRoles] = useState<RoleItem[]>([]);
-
   const [isLoading, setIsLoading] = useState(true);
   const [toastMsg, setToastMsg] = useState("");
 
-  // PERBAIKAN LINTER: Menginisiasi data secara langsung agar tidak terjadi flash UI,
-  // sekaligus menggunakan setter di useEffect agar linter tidak mendeteksi variabel menganggur.
   const [userRole, setUserRole] = useState(() => {
     const storedUser = localStorage.getItem("centrawork_user");
     return storedUser ? JSON.parse(storedUser).role : "";
@@ -99,9 +94,7 @@ const TasksTab: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<TaskAssignment | null>(null);
   const [laporanText, setLaporanText] = useState("");
   const [fotoBukti, setFotoBukti] = useState("");
-
   const fileInputRef = useRef<HTMLInputElement>(null);
-
   const [showEdit, setShowEdit] = useState(false);
   const [editId, setEditId] = useState("");
   const [editJudul, setEditJudul] = useState("");
@@ -171,7 +164,6 @@ const TasksTab: React.FC = () => {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setIsSaving(true);
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -181,7 +173,6 @@ const TasksTab: React.FC = () => {
         const MAX_SIZE = 800;
         let width = img.width;
         let height = img.height;
-
         if (width > height && width > MAX_SIZE) {
           height *= MAX_SIZE / width;
           width = MAX_SIZE;
@@ -189,12 +180,10 @@ const TasksTab: React.FC = () => {
           width *= MAX_SIZE / height;
           height = MAX_SIZE;
         }
-
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx?.drawImage(img, 0, 0, width, height);
-
         const base64 = canvas.toDataURL("image/jpeg", 0.7);
         setFotoBukti(base64);
         setIsSaving(false);
@@ -206,12 +195,10 @@ const TasksTab: React.FC = () => {
 
   const toggleStatus = async (item: TaskAssignment) => {
     if (item.status === "Tidak Dikerjakan") return;
-
     const newStatus = item.status === "Selesai" ? "Pending" : "Selesai";
     setTasksList((prev) =>
       prev.map((t) => (t.id === item.id ? { ...t, status: newStatus } : t)),
     );
-
     try {
       await api.patch(`/tasks/${item.id}/status`, { status: newStatus });
     } catch {
@@ -264,7 +251,6 @@ const TasksTab: React.FC = () => {
     }
   };
 
-  // LOGIKA FILTER
   const baseTasks = tasksList.filter((item) => {
     const taskTitle = item.task?.judul_tugas?.toLowerCase() || "";
     const userName = item.penerima?.nama_lengkap?.toLowerCase() || "";
@@ -286,7 +272,6 @@ const TasksTab: React.FC = () => {
     return false;
   });
 
-  // PERBAIKAN: Mengurutkan otomatis. "Pending" di atas, sisanya di bawah.
   const sortedTasks = baseTasks.sort((a, b) => {
     if (a.status === "Pending" && b.status !== "Pending") return -1;
     if (a.status !== "Pending" && b.status === "Pending") return 1;
@@ -299,7 +284,6 @@ const TasksTab: React.FC = () => {
     (t) => t.status === "Tidak Dikerjakan",
   ).length;
   const countTotal = sortedTasks.length;
-
   const filteredTasks = sortedTasks.filter(
     (t) => statusFilter === "semua" || t.status === statusFilter,
   );
@@ -332,7 +316,6 @@ const TasksTab: React.FC = () => {
             <IonSegmentButton value="rutin">
               <IonLabel>Rutin</IonLabel>
             </IonSegmentButton>
-            {/* PERBAIKAN: Menyamakan penamaan segmen delegasi yang responsif */}
             <IonSegmentButton value="delegasi">
               <IonLabel>{isExecutive ? "Delegasi" : "Dari Atasan"}</IonLabel>
             </IonSegmentButton>
@@ -604,7 +587,6 @@ const TasksTab: React.FC = () => {
                           />
                         </div>
                       )}
-
                       <IonLabel
                         className="ion-text-wrap"
                         style={{ margin: "10px 0" }}
@@ -684,19 +666,19 @@ const TasksTab: React.FC = () => {
           </div>
         )}
 
-        {userRole !== "HR Asisten" && (
-          <IonFab
-            vertical="bottom"
-            horizontal="end"
-            slot="fixed"
-            style={{ marginBottom: "10px", marginRight: "10px" }}
-          >
-            <IonFabButton color="primary" routerLink="/add-task">
-              <IonIcon icon={add} />
-            </IonFabButton>
-          </IonFab>
-        )}
+        {/* PERBAIKAN: Tombol Tambah dibuka untuk SEMUA Karyawan termasuk HR Asisten */}
+        <IonFab
+          vertical="bottom"
+          horizontal="end"
+          slot="fixed"
+          style={{ marginBottom: "10px", marginRight: "10px" }}
+        >
+          <IonFabButton color="primary" routerLink="/add-task">
+            <IonIcon icon={add} />
+          </IonFabButton>
+        </IonFab>
 
+        {/* Modal-modal disembunyikan untuk menghemat ruang, pertahankan logika modal Anda */}
         <IonModal
           isOpen={detailModal}
           onDidDismiss={() => setDetailModal(false)}
@@ -755,7 +737,6 @@ const TasksTab: React.FC = () => {
                   {selectedTask?.penerima?.nama_lengkap}
                 </b>
               </p>
-
               {selectedTask?.task?.tenggat_waktu && (
                 <p
                   style={{
@@ -769,7 +750,6 @@ const TasksTab: React.FC = () => {
                   {formatTanggalHanyaDate(selectedTask.task.tenggat_waktu)}
                 </p>
               )}
-
               <p
                 style={{
                   color: "gray",
@@ -788,7 +768,6 @@ const TasksTab: React.FC = () => {
               </p>
             </div>
 
-            {/* FORM LAPORAN: Terbuka khusus selama tugas masih "Pending" */}
             {selectedTask?.penerima?.id === currentUserId &&
               selectedTask?.status === "Pending" && (
                 <>
@@ -829,7 +808,6 @@ const TasksTab: React.FC = () => {
                       </IonLabel>
                     </IonItem>
                   </IonList>
-
                   {fotoBukti && (
                     <div style={{ marginTop: "15px", textAlign: "center" }}>
                       <img
@@ -845,7 +823,6 @@ const TasksTab: React.FC = () => {
                       />
                     </div>
                   )}
-
                   <input
                     type="file"
                     accept="image/*"
@@ -853,7 +830,6 @@ const TasksTab: React.FC = () => {
                     onChange={handleFileChange}
                     style={{ display: "none" }}
                   />
-
                   <IonButton
                     expand="block"
                     onClick={submitLaporanOnly}
@@ -866,7 +842,6 @@ const TasksTab: React.FC = () => {
                   >
                     {isSaving ? <IonSpinner name="dots" /> : "Simpan Laporan"}
                   </IonButton>
-
                   <div
                     style={{
                       textAlign: "center",
@@ -881,7 +856,6 @@ const TasksTab: React.FC = () => {
                 </>
               )}
 
-            {/* Tampilan Laporan untuk Atasan / Saat Tugas Sudah Selesai */}
             {(selectedTask?.penerima?.id !== currentUserId ||
               selectedTask?.status !== "Pending") &&
               (selectedTask?.laporan || selectedTask?.foto_bukti) && (
@@ -985,6 +959,7 @@ const TasksTab: React.FC = () => {
             </IonButton>
           </IonContent>
         </IonModal>
+
         <IonToast
           isOpen={!!toastMsg}
           message={toastMsg}

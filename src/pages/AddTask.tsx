@@ -245,7 +245,6 @@ const AddTask: React.FC = () => {
                     onIonChange={(e) => setPenerimaId(e.detail.value)}
                     placeholder="-- Ketuk untuk memilih --"
                     interface="alert"
-                    // PERBAIKAN: Menyembunyikan nama panjang menyamping menjadi angka saja
                     selectedText={
                       penerimaId.length > 0
                         ? `${penerimaId.length} Orang Terpilih`
@@ -265,7 +264,6 @@ const AddTask: React.FC = () => {
                   </IonSelect>
                 </IonItem>
 
-                {/* PERBAIKAN: Menampilkan nama ke bawah dengan sangat rapi */}
                 {penerimaId.length > 0 && (
                   <div
                     style={{

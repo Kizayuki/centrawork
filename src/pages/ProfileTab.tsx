@@ -15,6 +15,7 @@ import {
   IonToast,
   IonSpinner,
   useIonToast,
+  IonAlert,
 } from "@ionic/react";
 import {
   logOutOutline,
@@ -43,6 +44,7 @@ const ProfileTab: React.FC = () => {
   const [toastMsg, setToastMsg] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [presentGlobalToast] = useIonToast();
+  const [showLogoutAlert, setShowLogoutAlert] = useState(false);
 
   useEffect(() => {
     const loadUserData = async () => {
@@ -301,7 +303,7 @@ const ProfileTab: React.FC = () => {
           expand="block"
           color="danger"
           fill="outline"
-          onClick={handleLogout}
+          onClick={() => setShowLogoutAlert(true)}
           style={{
             "--border-radius": "10px",
             borderWidth: "2px",
@@ -311,6 +313,26 @@ const ProfileTab: React.FC = () => {
           <IonIcon slot="start" icon={logOutOutline} />
           <b>Keluar Akun</b>
         </IonButton>
+
+        <IonAlert
+          isOpen={showLogoutAlert}
+          onDidDismiss={() => setShowLogoutAlert(false)}
+          header="Konfirmasi Keluar"
+          message="Apakah Anda yakin ingin keluar dari akun ini?"
+          buttons={[
+            {
+              text: "Batal",
+              role: "cancel",
+            },
+            {
+              text: "Ya, Keluar",
+              role: "destructive",
+              handler: handleLogout,
+              cssClass: "alert-button-danger",
+            },
+          ]}
+        />
+
         <IonToast
           isOpen={!!toastMsg}
           message={toastMsg}

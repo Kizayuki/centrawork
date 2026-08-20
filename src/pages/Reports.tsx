@@ -34,8 +34,8 @@ interface ReportItem {
   nama_role: string;
   total_tugas: number;
   tugas_selesai: number;
-  tugas_pending: number; // DATA BARU
-  tugas_gagal: number; // DATA BARU
+  tugas_pending: number;
+  tugas_gagal: number;
   produktivitas: number;
   poin: number;
 }
@@ -59,7 +59,13 @@ const Reports: React.FC = () => {
     setIsLoading(true);
     try {
       const resReports = await api.get<ReportItem[]>("/reports");
-      setReports(resReports.data.sort((a, b) => b.poin - a.poin));
+
+      const filteredReports = resReports.data.filter(
+        (item) =>
+          !["Super Admin", "Super HR", "Manajemen"].includes(item.nama_role),
+      );
+
+      setReports(filteredReports.sort((a, b) => b.poin - a.poin));
 
       const storedUser = localStorage.getItem("centrawork_user");
       if (storedUser) {
@@ -104,7 +110,7 @@ const Reports: React.FC = () => {
             <IonMenuButton />
           </IonButtons>
           <IonTitle>
-            <b>Laporan & Sistem</b>
+            <b>Laporan & Log Sistem</b>
           </IonTitle>
         </IonToolbar>
 
@@ -158,8 +164,6 @@ const Reports: React.FC = () => {
                       Ranking Karyawan
                     </h4>
                   </IonText>
-
-                  {/* PERBAIKAN: Hanya Executive yang bisa melihat tombol Export */}
                   {isExecutive && (
                     <IonButton
                       size="small"
@@ -173,116 +177,128 @@ const Reports: React.FC = () => {
                 </div>
 
                 <IonList style={{ background: "transparent" }} lines="none">
-                  {reports.map((item, index) => (
-                    <IonItem
-                      key={item.id}
+                  {reports.length === 0 ? (
+                    <p
                       style={{
-                        marginBottom: "10px",
-                        borderRadius: "12px",
-                        "--background": "#ffffff",
-                        boxShadow: "0 2px 5px rgba(0,0,0,0.05)",
+                        textAlign: "center",
+                        color: "gray",
+                        marginTop: "20px",
                       }}
                     >
-                      <div
-                        slot="start"
+                      Belum ada data ranking karyawan.
+                    </p>
+                  ) : (
+                    reports.map((item, index) => (
+                      <IonItem
+                        key={item.id}
                         style={{
-                          fontSize: "1.5rem",
-                          fontWeight: "bold",
-                          color:
-                            index === 0
-                              ? "#FFD700"
-                              : index === 1
-                                ? "#C0C0C0"
-                                : index === 2
-                                  ? "#CD7F32"
-                                  : "gray",
-                          width: "30px",
-                          textAlign: "center",
+                          marginBottom: "10px",
+                          borderRadius: "12px",
+                          "--background": "#ffffff",
+                          boxShadow: "0 2px 5px rgba(0,0,0,0.05)",
                         }}
                       >
-                        #{index + 1}
-                      </div>
-                      <IonLabel>
-                        <h2
+                        <div
+                          slot="start"
                           style={{
+                            fontSize: "1.5rem",
                             fontWeight: "bold",
-                            fontSize: "1.1rem",
-                            color: "#1f1f1f",
+                            color:
+                              index === 0
+                                ? "#FFD700"
+                                : index === 1
+                                  ? "#C0C0C0"
+                                  : index === 2
+                                    ? "#CD7F32"
+                                    : "gray",
+                            width: "30px",
+                            textAlign: "center",
                           }}
                         >
-                          {item.nama_lengkap}
-                        </h2>
-                        <p style={{ color: "gray", fontSize: "0.85rem" }}>
-                          {item.nama_role}
-                        </p>
-                        <div
-                          style={{
-                            marginTop: "8px",
-                            display: "flex",
-                            gap: "8px",
-                          }}
-                        >
-                          <IonBadge
-                            color={
-                              item.produktivitas >= 80
-                                ? "success"
-                                : item.produktivitas >= 50
-                                  ? "warning"
-                                  : "danger"
-                            }
-                          >
-                            Prod: {item.produktivitas}%
-                          </IonBadge>
-                          <IonBadge color="primary">Poin: {item.poin}</IonBadge>
+                          #{index + 1}
                         </div>
-                      </IonLabel>
-                      <div slot="end" style={{ textAlign: "right" }}>
-                        <IonText color="dark">
-                          <h3
+                        <IonLabel>
+                          <h2
                             style={{
-                              margin: 0,
                               fontWeight: "bold",
-                              fontSize: "1.2rem",
+                              fontSize: "1.1rem",
+                              color: "#1f1f1f",
                             }}
                           >
-                            {item.tugas_selesai} / {item.total_tugas}
-                          </h3>
-                          <p
-                            style={{
-                              margin: 0,
-                              fontSize: "0.75rem",
-                              color: "gray",
-                            }}
-                          >
-                            Selesai
+                            {item.nama_lengkap}
+                          </h2>
+                          <p style={{ color: "gray", fontSize: "0.85rem" }}>
+                            {item.nama_role}
                           </p>
-                        </IonText>
-
-                        {/* FITUR TAMBAHAN: Menampilkan juga Tugas Pending dan Gagal */}
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: "5px",
-                            marginTop: "5px",
-                            justifyContent: "flex-end",
-                          }}
-                        >
-                          <IonBadge
-                            color="warning"
-                            style={{ fontSize: "0.65rem" }}
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              display: "flex",
+                              gap: "8px",
+                            }}
                           >
-                            {item.tugas_pending} P
-                          </IonBadge>
-                          <IonBadge
-                            color="danger"
-                            style={{ fontSize: "0.65rem" }}
+                            <IonBadge
+                              color={
+                                item.produktivitas >= 80
+                                  ? "success"
+                                  : item.produktivitas >= 50
+                                    ? "warning"
+                                    : "danger"
+                              }
+                            >
+                              Prod: {item.produktivitas}%
+                            </IonBadge>
+                            <IonBadge color="primary">
+                              Poin: {item.poin}
+                            </IonBadge>
+                          </div>
+                        </IonLabel>
+                        <div slot="end" style={{ textAlign: "right" }}>
+                          <IonText color="dark">
+                            <h3
+                              style={{
+                                margin: 0,
+                                fontWeight: "bold",
+                                fontSize: "1.2rem",
+                              }}
+                            >
+                              {item.tugas_selesai} / {item.total_tugas}
+                            </h3>
+                            <p
+                              style={{
+                                margin: 0,
+                                fontSize: "0.75rem",
+                                color: "gray",
+                              }}
+                            >
+                              Selesai
+                            </p>
+                          </IonText>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "5px",
+                              marginTop: "5px",
+                              justifyContent: "flex-end",
+                            }}
                           >
-                            {item.tugas_gagal} G
-                          </IonBadge>
+                            <IonBadge
+                              color="warning"
+                              style={{ fontSize: "0.65rem" }}
+                            >
+                              {item.tugas_pending} P
+                            </IonBadge>
+                            <IonBadge
+                              color="danger"
+                              style={{ fontSize: "0.65rem" }}
+                            >
+                              {item.tugas_gagal} G
+                            </IonBadge>
+                          </div>
                         </div>
-                      </div>
-                    </IonItem>
-                  ))}
+                      </IonItem>
+                    ))
+                  )}
                 </IonList>
               </>
             )}
@@ -353,7 +369,7 @@ const Reports: React.FC = () => {
                           }}
                         >
                           <IonIcon icon={shieldCheckmarkOutline} /> {log.aktor}{" "}
-                          •
+                          •{" "}
                           <IonIcon
                             icon={timeOutline}
                             style={{ marginLeft: "5px" }}

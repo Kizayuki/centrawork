@@ -52,6 +52,8 @@ const Login: React.FC = () => {
         JSON.stringify(response.data.user),
       );
 
+      const userLevel = response.data.user.level_akses;
+
       present({
         message: "Berhasil Login! Selamat datang.",
         duration: 2500,
@@ -59,7 +61,11 @@ const Login: React.FC = () => {
         position: "top",
       });
 
-      history.replace("/tab/dashboard");
+      if (userLevel === 0) {
+        history.replace("/company-management");
+      } else {
+        history.replace("/tab/dashboard");
+      }
     } catch (error) {
       const err = error as { response?: { data?: { error?: string } } };
       present({

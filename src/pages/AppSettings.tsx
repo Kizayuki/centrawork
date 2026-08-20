@@ -16,6 +16,7 @@ import {
   IonInput,
   IonButton,
   IonToast,
+  IonSpinner,
 } from "@ionic/react";
 import {
   logoWhatsapp,
@@ -27,16 +28,17 @@ import {
   imageOutline,
 } from "ionicons/icons";
 import { useIonViewWillEnter } from "@ionic/react";
+import api from "../api";
 
 const AppSettings: React.FC = () => {
   const [isDark, setIsDark] = useState(false);
   const [appName, setAppName] = useState("");
   const [toastMsg, setToastMsg] = useState("");
   const [userRole, setUserRole] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fungsi Pembantu Sinkronisasi Favicon Global
   const syncFavicon = () => {
     const icon = localStorage.getItem("centrawork_app_icon");
     if (icon) {
@@ -50,10 +52,28 @@ const AppSettings: React.FC = () => {
     }
   };
 
+  const fetchCompanySettings = async () => {
+    try {
+      const res = await api.get("/company/settings");
+      if (res.data.app_name) {
+        setAppName(res.data.app_name);
+        localStorage.setItem("centrawork_app_name", res.data.app_name);
+        document.title = res.data.app_name;
+      }
+      if (res.data.app_icon) {
+        localStorage.setItem("centrawork_app_icon", res.data.app_icon);
+        syncFavicon();
+      }
+    } catch (error) {
+      console.error("Gagal menarik pengaturan kustom", error);
+    }
+  };
+
   useIonViewWillEnter(() => {
     const storedUser = localStorage.getItem("centrawork_user");
     if (storedUser) setUserRole(JSON.parse(storedUser).role);
-    syncFavicon(); // Terapkan Favicon saat masuk halaman
+    syncFavicon();
+    fetchCompanySettings(); // PERBAIKAN: Selalu tarik data terbaru dari database
   });
 
   useEffect(() => {
@@ -71,26 +91,36 @@ const AppSettings: React.FC = () => {
     document.documentElement.classList.toggle("ion-palette-dark", checked);
   };
 
-  const handleSaveAppInfo = () => {
-    localStorage.setItem("centrawork_app_name", appName);
-    document.title = appName;
-    window.dispatchEvent(new Event("app_name_changed"));
-    setToastMsg("Nama Aplikasi berhasil disimpan!");
+  const handleSaveAppInfo = async () => {
+    setIsSaving(true);
+    try {
+      // PERBAIKAN: Menyimpan nama aplikasi ke Database Perusahaan
+      await api.put("/company/settings", { app_name: appName });
+
+      localStorage.setItem("centrawork_app_name", appName);
+      document.title = appName;
+      window.dispatchEvent(new Event("app_name_changed"));
+      setToastMsg("Nama Aplikasi berhasil disimpan ke Sistem!");
+    } catch {
+      setToastMsg("Gagal menyimpan ke database.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleIconChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleIconChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setIsSaving(true);
     const reader = new FileReader();
     reader.onload = (event) => {
       const img = new Image();
-      img.onload = () => {
+      img.onload = async () => {
         const canvas = document.createElement("canvas");
         const MAX_SIZE = 128;
         let width = img.width;
         let height = img.height;
-
         if (width > height && width > MAX_SIZE) {
           height *= MAX_SIZE / width;
           width = MAX_SIZE;
@@ -98,17 +128,24 @@ const AppSettings: React.FC = () => {
           width *= MAX_SIZE / height;
           height = MAX_SIZE;
         }
-
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         ctx?.drawImage(img, 0, 0, width, height);
 
         const base64 = canvas.toDataURL("image/png", 0.8);
-        localStorage.setItem("centrawork_app_icon", base64);
 
-        syncFavicon();
-        setToastMsg("Ikon Aplikasi berhasil diubah!");
+        try {
+          // PERBAIKAN: Menyimpan ikon ke Database Perusahaan
+          await api.put("/company/settings", { app_icon: base64 });
+          localStorage.setItem("centrawork_app_icon", base64);
+          syncFavicon();
+          setToastMsg("Ikon Aplikasi berhasil diubah di Sistem!");
+        } catch {
+          setToastMsg("Gagal menyimpan ikon ke database.");
+        } finally {
+          setIsSaving(false);
+        }
       };
       img.src = event.target?.result as string;
     };
@@ -184,8 +221,13 @@ const AppSettings: React.FC = () => {
                   slot="end"
                   onClick={handleSaveAppInfo}
                   style={{ marginTop: "auto" }}
+                  disabled={isSaving}
                 >
-                  <IonIcon icon={saveOutline} />
+                  {isSaving ? (
+                    <IonSpinner name="dots" color="light" />
+                  ) : (
+                    <IonIcon icon={saveOutline} />
+                  )}
                 </IonButton>
               </IonItem>
 
@@ -193,6 +235,7 @@ const AppSettings: React.FC = () => {
                 lines="full"
                 button
                 onClick={() => fileInputRef.current?.click()}
+                disabled={isSaving}
               >
                 <IonIcon icon={imageOutline} slot="start" color="primary" />
                 <IonLabel>Ubah Ikon Aplikasi (Favicon)</IonLabel>
@@ -305,7 +348,7 @@ const AppSettings: React.FC = () => {
             {appName}
           </h3>
           <p style={{ margin: 0, fontSize: "0.85rem" }}>
-            Versi 1.0.0 (Node.js & MySQL Edition)
+            Versi 1.0.0 (SaaS Multi-Tenant Edition)
           </p>
           <p style={{ margin: "5px 0 0 0", fontSize: "0.8rem", opacity: 0.7 }}>
             &copy; 2026 All Right Reserved
